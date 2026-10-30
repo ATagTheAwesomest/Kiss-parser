@@ -1,6 +1,6 @@
 # KISS: How `Parse-KSS.ps1` Reads Its Input Files
 
-Draft README for the KISS tool (source: `KISS/Parse-KSS.ps1`, about 3,390 lines of PowerShell). Written from reading the script and the sample `.kss` files in the project folder. Meant to later feed an SOP. The script was not modified or run.
+The official field-by-field format is in [KISS-STANDARD.md](KISS-STANDARD.md); note that its column names differ from the labels used below (e.g. D field 1 is the standard's "Drawing no", field 11 is "Notes", and weights live in fields 14/15). Draft README for the KISS tool (source: `KISS/Parse-KSS.ps1`, about 3,390 lines of PowerShell). Written from reading the script and the sample `.kss` files in the project folder. Meant to later feed an SOP. The script was not modified or run.
 
 ## 1. What it does
 
@@ -45,7 +45,7 @@ The sample files in the folder contain no `L` lines, so the labor tab is probabl
 
 | Index | Field | Notes |
 |---|---|---|
-| 1 | Assembly ID | e.g. `52031000`. First 4 digits are the sequence (e.g. 5203) |
+| 1 | Assembly ID (standard: Drawing no) | e.g. `52031000`. First 4 digits are the sequence (e.g. 5203) |
 | 3 | Main mark | Mark of the assembly's main part |
 | 4 | Part mark | e.g. `3bp43`. **Blank for loose hardware**; the script then builds a mark (section 4) |
 | 5 | Qty | Must be an integer, or the whole line is silently skipped |
@@ -54,8 +54,8 @@ The sample files in the folder contain no `L` lines, so the labor tab is probabl
 | 8 | Grade | e.g. `A572-50` |
 | 9 | Length | Looks like millimeters in the samples (`7035.80`) but the script stores it as text and does not convert |
 | 10 | Finish / coating | Optional free text from the detailer, e.g. `3-1`, `0-0`, `SEE NOTE`, or blank. Shown as COATING on the QPR. Never overwritten by the TL (see section 8, gotcha 12) |
-| 11 | Description | Optional, e.g. `SHEAR_PLATE` |
-| last numeric | Unit weight | See gotcha 1 |
+| 11 | Description (standard: Notes) | Optional, e.g. `SHEAR_PLATE` |
+| last numeric | Unit weight | See gotcha 1. The standard puts gross part weight at 14 and net weight at 15; field 13 is the cost code |
 
 A `D` line must have at least 10 comma-separated fields to be accepted. Fields are split on commas with no quote handling, so a comma inside a description would shift every later column. The script's own generated KSS files replace commas in descriptions with `;` for this reason.
 

@@ -17,13 +17,10 @@ software) into the shop's working documents.
 | --- | --- |
 | `tools/Parse-KSS.ps1` | The KISS engine. Reads the `.kss` files (or a soundwall post-schedule CSV) in the current folder and writes the BOM workbook, filtered `.kss` files, an optional QPR workbook, and per-TL shop scripts: `Sort-PlatesByThickness` (sorts plate DXFs into thickness folders), `Type-Quantities` and `Type-Grades` (type values into ProNest). |
 | `tools/verify-whitelist.ps1` | Tests an assembly whitelist on its own, using the same parser as the engine. |
-| `tools/build_valid_filtered_kiss.py` | Builds a "Filtered Assemblies - VALID" `.kss` from the `.kss` files in a folder, keeping only the assemblies listed in that folder's `assemblies.txt`. Usage: `python build_valid_filtered_kiss.py <job folder>` (defaults to the current folder). |
-| `tools/piece_mark_entry.py` | Small window that types a list of piece marks and quantities into a "Production/Shipping Entry" screen by clicking saved screen positions. Saves positions to `entry_config.json` next to the script (git-ignored, per machine; `entry_config.example.json` shows the format). |
 
 ## Needs
 
 - Windows PowerShell 5.1 and Microsoft Excel (the engine drives Excel to build the workbooks).
-- For the Python tools: Python 3 and `pip install -r tools/requirements.txt`.
 
 ## Run
 

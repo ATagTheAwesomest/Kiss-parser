@@ -110,7 +110,7 @@ REV override keeps the newest TL (highest number in the file name) for each asse
 
 **File naming:** `<Project> - Job <Job> - <TL1>_<TL2>... BOM.xlsx`. If the old file is locked, a timestamp is appended instead. With many TLs the name is shortened to `<first>-<last> (n TLs)`.
 
-**Filtered KSS:** `... - Filtered Assemblies.kss`, rebuilt from the kept data. Sorted by assembly. If an assembly appears in several files, only the first selected file's version is used. The script then re-reads it with its integrity check (`Test-KissAssemblyIntegrity`): every `D` block must have 12+ fields and a numeric qty, each assembly must end with a matching `S` line, the `S` qty must match the main-part qty, and only `KISS/H/D/S/A/*/END` record types are allowed. A failed check deletes the file and stops the script. The "- VALID" files in the folder were made by a separate script (`build_valid_filtered_kiss.py`).
+**Filtered KSS:** `... - Filtered Assemblies.kss`, rebuilt from the kept data. Sorted by assembly. If an assembly appears in several files, only the first selected file's version is used. The script then re-reads it with its integrity check (`Test-KissAssemblyIntegrity`): every `D` block must have 12+ fields and a numeric qty, each assembly must end with a matching `S` line, the `S` qty must match the main-part qty, and only `KISS/H/D/S/A/*/END` record types are allowed. A failed check deletes the file and stops the script.
 
 **Shop scripts (only generated if the selection has plates):**
 - `Sort-PlatesByThickness - <label>.bat`: moves each `<partmark>.dxf` into a folder named by decimal thickness. It looks in a `dxf\` subfolder if one exists, otherwise the batch file's own folder. Reports moved and missing counts.

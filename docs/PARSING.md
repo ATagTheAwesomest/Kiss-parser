@@ -53,9 +53,9 @@ The sample files in the folder contain no `L` lines, so the labor tab is probabl
 | 7 | Size | e.g. `3/4X7` for plates (thickness X width), `6X6X3/8` for HSS |
 | 8 | Grade | e.g. `A572-50` |
 | 9 | Length | Looks like millimeters in the samples (`7035.80`) but the script stores it as text and does not convert |
-| 10 | Finish / coating | Optional free text from the detailer, e.g. `3-1`, `0-0`, `SEE NOTE`, or blank. Shown as COATING on the QPR. Never overwritten by the TL (see section 8, gotcha 12) |
+| 10 | Finish / coating | Optional free text from the detailer, e.g. `3-1`, `0-0`, `SEE NOTE`, or blank. Shown as COATING on the QPR. Overwritten by the TL in filtered files unless `-TransmittalInCostCode` is used (gotcha 12) |
 | 11 | Description (standard: Notes) | Optional, e.g. `SHEAR_PLATE` |
-| 14 / 15 | Unit weight | Gross (14), else net (15); see gotcha 1. Field 13 is the cost code |
+| last numeric | Unit weight | See gotcha 1 (`-StandardWeight` reads fields 14/15). Field 13 is the cost code |
 
 A `D` line must have at least 10 comma-separated fields to be accepted. Fields are split on commas with no quote handling, so a comma inside a description would shift every later column. The script's own generated KSS files replace commas in descriptions with `;` for this reason.
 
@@ -123,7 +123,7 @@ Reads a post schedule with `Import-Csv`. Required column: `Post ID` (rows withou
 
 ## 8. Gotchas and risks (things the SOP should cover)
 
-1. **Weight comes from the file, and Tekla files have none.** The parser now reads gross part weight (field 14), else net part weight (field 15), else 0. Tekla exports (Kiewit, Crusoe) leave both blank or `0.0`, so their BOM weights show 0; Advance Steel files carry real weights. (Before, it used the last numeric field, which was the cost code on main marks.) Weights in the BOM should still be spot-checked.
+1. **Weight can be wrong (default behavior).** The script takes the unit weight from the *last field that parses as a number*, scanning right to left. On Tekla files, which carry no weight, that is the cost code on main marks (e.g. 23) and `0.0` on parts. Run with `-StandardWeight` to read gross weight (field 14), else net (field 15), else 0 instead. Spot-check weights either way.
 2. **Length units are not converted** for KSS files (mm in the samples). Do not read the Length column as inches or feet.
 3. **Rows can vanish silently:** a `D` line with a non-integer qty or fewer than 10 fields is skipped without a warning.
 4. **No quote handling** in `D` lines (commas inside text break the columns).
@@ -134,7 +134,7 @@ Reads a post schedule with `Import-Csv`. Required column: `Post ID` (rows withou
 9. **Typing macros are timing-based** (SendKeys with fixed delays) and type into whatever window has focus. The operator must not touch the keyboard during a run.
 10. **Output goes to the current folder** and old outputs are not cleaned up. That is why the folder holds many dated BOM and QPR workbooks.
 11. The script file is about 150 KB with Excel layout code making up most of it; the actual parsing is roughly lines 1,380–1,480 (KSS) and 966–1,115 (Soundwall).
-12. **Coating/finish was replaced by the transmittal (fixed).** When a whitelist assigned TLs, the parser copied the TL into the Finish field (field 10), so Filtered Assemblies `.kss` files carried `TL1296` where the original had `3-1`, `0-0`, `2-9`, `SEE NOTE` or blank. Finish is now never touched. The TL is carried in the standard's *lot name* slot instead: the 4th field of the `S` line (`S,5131,1,TL1296`). Fields 12 and up of each `D` line (part name, cost code, weights, area) and the drawing revision (field 2) are now passed through unchanged; before, the rewrite hard-coded revision `0` and put the weight in the cost-code slot. Files filtered before the fix still carry the TL in field 10; re-run them from the original `.kss`.
+12. **Whitelist TLs overwrite Finish (default behavior).** When a whitelist assigns TLs, the filtered `.kss` carries the TL in field 10 (Finish/coating) in place of the original value (`3-1`, `0-0`, `2-9`, `SEE NOTE`, blank). Run with `-TransmittalInCostCode` to leave Finish as received and write the TL into field 13 (cost code / pay category) instead; that mode also keeps each line's drawing revision (field 2) and fields 12+ as received instead of rewriting revision as `0`. Filtered files made earlier still have the TL in field 10; re-run from the original `.kss`.
 
 ## 9. Open questions for Andrew
 

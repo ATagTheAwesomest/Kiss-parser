@@ -22,6 +22,17 @@ software) into the shop's working documents.
 
 - Windows PowerShell 5.1 and Microsoft Excel (the engine drives Excel to build the workbooks).
 
+## Options
+
+Run with no options and the script behaves exactly as it always has. Both switches are off by default.
+
+| Switch | Effect |
+| --- | --- |
+| `-TransmittalInCostCode` | Filtered `.kss`: Finish/coating stays as received and the TL is written in the cost code / pay category slot (D field 13). Revision and fields 12+ are kept as received. |
+| `-StandardWeight` | BOM weight is read from KISS fields 14/15 (gross, else net, else 0) instead of the last numeric field on the line. |
+
+Example: `powershell -ExecutionPolicy Bypass -File <path to KISS>\tools\Parse-KSS.ps1 -TransmittalInCostCode`
+
 ## Run
 
 1. Copy or drop the job's `.kss` files into `jobs/` (or any folder).

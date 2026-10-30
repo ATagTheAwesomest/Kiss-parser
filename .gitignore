@@ -1,0 +1,22 @@
+# Job data and everything a run writes. Customer files never go in this repo.
+*.kss
+*.xlsx
+*.xls
+*.csv
+*.zip
+*.dwg
+*.dxf
+*.txt
+!requirements.txt
+Sort-PlatesByThickness*.bat
+Type-Quantities*.bat
+Type-Grades*.bat
+*.log
+captures/
+dxf/
+# Per-machine screen positions for piece_mark_entry.py
+entry_config.json
+__pycache__/
+
+# Local job drawer
+jobs/

@@ -1,0 +1,3 @@
+# Keep Windows scripts byte-for-byte (line endings and encoding matter to PowerShell 5.1 and cmd).
+*.ps1 -text
+*.bat -text

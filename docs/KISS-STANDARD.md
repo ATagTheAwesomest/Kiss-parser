@@ -55,7 +55,7 @@ Idx 1 Description (Owner, Architect, Engineer, General, Erector, Job Site), 2 Na
 | 15 | Part net weight | 7.2 | No | v1.1 | No |
 | 16 | Part net area | 7.2 | No | v1.1; plates only; ft2 imperial, m2 metric | No |
 
-**Weight (fixed):** the parser now reads field 14, else 15. It used to not read field 14. It takes the last numeric field scanning right to left, which lands on field 15 (net weight), 14, 13 (cost code!) or the length depending on the line. Reading index 14 (gross) or 15 (net) directly would fix the weight problem in PARSING.md gotcha 1. Also, `Parse-KSS.ps1` writes its Filtered Assemblies files with weight in index 13 (the cost-code slot), not 14.
+**Weight (fixed):** the parser now reads field 14, else 15, else 0. It used to take the last numeric field, which could be the cost code (field 13) or the length.
 
 ### Shape codes (field 6)
 

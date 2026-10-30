@@ -55,7 +55,7 @@ The sample files in the folder contain no `L` lines, so the labor tab is probabl
 | 9 | Length | Looks like millimeters in the samples (`7035.80`) but the script stores it as text and does not convert |
 | 10 | Finish / coating | Optional free text from the detailer, e.g. `3-1`, `0-0`, `SEE NOTE`, or blank. Shown as COATING on the QPR. Never overwritten by the TL (see section 8, gotcha 12) |
 | 11 | Description (standard: Notes) | Optional, e.g. `SHEAR_PLATE` |
-| last numeric | Unit weight | See gotcha 1. The standard puts gross part weight at 14 and net weight at 15; field 13 is the cost code |
+| 14 / 15 | Unit weight | Gross (14), else net (15); see gotcha 1. Field 13 is the cost code |
 
 A `D` line must have at least 10 comma-separated fields to be accepted. Fields are split on commas with no quote handling, so a comma inside a description would shift every later column. The script's own generated KSS files replace commas in descriptions with `;` for this reason.
 

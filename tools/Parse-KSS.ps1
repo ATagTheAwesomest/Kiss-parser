@@ -1434,11 +1434,16 @@ else {
                     $qty = 0
                     if (-not [int]::TryParse($parts[5].Trim(), [ref]$qty)) { continue }
 
-                    $weight = 0.00
-                    for ($idx = $parts.Length - 1; $idx -ge 0; $idx--) {
-                        $candidate = $parts[$idx].Trim()
-                        if ($candidate -and [decimal]::TryParse($candidate, [ref]$weight)) {
-                            break
+                    # KISS v1.1: field 14 = gross part weight, field 15 = net part weight. Blank/absent = 0 (Tekla exports carry none).
+                    $weight = [decimal]0
+                    foreach ($wIdx in 14, 15) {
+                        if ($parts.Length -gt $wIdx) {
+                            $candidate = $parts[$wIdx].Trim()
+                            $parsedWeight = [decimal]0
+                            if ($candidate -and [decimal]::TryParse($candidate, [ref]$parsedWeight) -and $parsedWeight -gt 0) {
+                                $weight = $parsedWeight
+                                break
+                            }
                         }
                     }
 

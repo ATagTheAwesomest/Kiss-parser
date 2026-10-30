@@ -123,7 +123,7 @@ Reads a post schedule with `Import-Csv`. Required column: `Post ID` (rows withou
 
 ## 8. Gotchas and risks (things the SOP should cover)
 
-1. **Weight can be wrong.** The script takes the unit weight from the *last field that parses as a number*, scanning right to left. When a `D` line has no trailing weight (like the first sample row, ending `...,COLUMN(TS-C),,8-22,,`), the scan runs back to the **length** field and uses it (7035.80) as the weight. Where a trailing `0` or `0.0` exists, the weight is 0. Weights in the BOM should be spot-checked before use.
+1. **Weight comes from the file, and Tekla files have none.** The parser now reads gross part weight (field 14), else net part weight (field 15), else 0. Tekla exports (Kiewit, Crusoe) leave both blank or `0.0`, so their BOM weights show 0; Advance Steel files carry real weights. (Before, it used the last numeric field, which was the cost code on main marks.) Weights in the BOM should still be spot-checked.
 2. **Length units are not converted** for KSS files (mm in the samples). Do not read the Length column as inches or feet.
 3. **Rows can vanish silently:** a `D` line with a non-integer qty or fewer than 10 fields is skipped without a warning.
 4. **No quote handling** in `D` lines (commas inside text break the columns).

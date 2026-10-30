@@ -55,7 +55,7 @@ Idx 1 Description (Owner, Architect, Engineer, General, Erector, Job Site), 2 Na
 | 15 | Part net weight | 7.2 | No | v1.1 | No |
 | 16 | Part net area | 7.2 | No | v1.1; plates only; ft2 imperial, m2 metric | No |
 
-**Weight finding:** the parser doesn't read field 14. It takes the last numeric field scanning right to left, which lands on field 15 (net weight), 14, 13 (cost code!) or the length depending on the line. Reading index 14 (gross) or 15 (net) directly would fix the weight problem in PARSING.md gotcha 1. Also, `Parse-KSS.ps1` writes its Filtered Assemblies files with weight in index 13 (the cost-code slot), not 14.
+**Weight (fixed):** the parser now reads field 14, else 15. It used to not read field 14. It takes the last numeric field scanning right to left, which lands on field 15 (net weight), 14, 13 (cost code!) or the length depending on the line. Reading index 14 (gross) or 15 (net) directly would fix the weight problem in PARSING.md gotcha 1. Also, `Parse-KSS.ps1` writes its Filtered Assemblies files with weight in index 13 (the cost-code slot), not 14.
 
 ### Shape codes (field 6)
 
@@ -158,6 +158,6 @@ Checked against `25-351` TL1282/1296/1301/1313, `26-418` TL068 and `KSS-298923` 
 
 Consequences:
 
-- **Weights in the BOM are not real for Tekla files.** Those files carry no weight at all. On main marks the parser's "last numeric field" is the cost code (e.g. 23, 8, 17), and on parts it is the `0.0` net weight. Advance Steel files do carry real weights in fields 14 and 15.
+- **Tekla files carry no weight.** The parser now reads fields 14/15, so Tekla BOM weights show 0 (previously main marks showed the cost code, e.g. 23, 8, 17, as the weight). Advance Steel files carry real weights in fields 14 and 15.
 - **Finish values are job codes**, not paint names (`3-1`, `2-9`), so what they mean depends on the customer. They are the COATING column on the QPR and must be passed through untouched.
 - **Transmittal is not in the file.** It comes from the file name (`TL1313`). The filtered output now writes it to the `S` line lot name so it survives without touching Finish.

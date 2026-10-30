@@ -53,7 +53,7 @@ The sample files in the folder contain no `L` lines, so the labor tab is probabl
 | 7 | Size | e.g. `3/4X7` for plates (thickness X width), `6X6X3/8` for HSS |
 | 8 | Grade | e.g. `A572-50` |
 | 9 | Length | Looks like millimeters in the samples (`7035.80`) but the script stores it as text and does not convert |
-| 10 | Finish | Optional; also reused as the TL tag when a whitelist assigns TLs |
+| 10 | Finish / coating | Optional free text from the detailer, e.g. `3-1`, `0-0`, `SEE NOTE`, or blank. Shown as COATING on the QPR. Never overwritten by the TL (see section 8, gotcha 12) |
 | 11 | Description | Optional, e.g. `SHEAR_PLATE` |
 | last numeric | Unit weight | See gotcha 1 |
 
@@ -134,6 +134,7 @@ Reads a post schedule with `Import-Csv`. Required column: `Post ID` (rows withou
 9. **Typing macros are timing-based** (SendKeys with fixed delays) and type into whatever window has focus. The operator must not touch the keyboard during a run.
 10. **Output goes to the current folder** and old outputs are not cleaned up. That is why the folder holds many dated BOM and QPR workbooks.
 11. The script file is about 150 KB with Excel layout code making up most of it; the actual parsing is roughly lines 1,380–1,480 (KSS) and 966–1,115 (Soundwall).
+12. **Coating/finish was replaced by the transmittal (fixed).** When a whitelist assigned TLs, the parser copied the TL into the Finish field (field 10), so Filtered Assemblies `.kss` files carried `TL1296` where the original had `3-1`, `0-0`, `SEE NOTE` or blank. The TL already lives in its own field (`TL` property, workbook column A, file name), so the overwrite was removed. Files filtered before the fix still carry the TL in field 10; re-run them from the original `.kss`.
 
 ## 9. Open questions for Andrew
 

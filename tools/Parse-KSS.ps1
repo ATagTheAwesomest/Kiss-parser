@@ -576,10 +576,8 @@ function Apply-AssemblyWhitelist {
             if ($hasTlMap) {
                 if ($tlMap.ContainsKey($assmKey)) {
                     $item.TL = $tlMap[$assmKey]
-                    $item.Finish = $tlMap[$assmKey]
                 } else {
                     $item.TL = ""
-                    $item.Finish = ""
                 }
             }
             $filteredMaster.Add($item)

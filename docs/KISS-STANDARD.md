@@ -133,3 +133,31 @@ Free text up to 254 characters, anywhere but line 1. Skipped.
 - `H` customer, date, time, metric flag and file type (Revised Bill and Change Order identify revisions, which helps the REV logic).
 - `S` lot name.
 - `C` CNC strings.
+
+## What the files we actually receive contain
+
+Checked against `25-351` TL1282/1296/1301/1313, `26-418` TL068 and `KSS-298923` (Advance Steel) in the project folder.
+
+| Item | Tekla (Kiewit/TIC, Crusoe/DPR) | Advance Steel (Hoffman) |
+|---|---|---|
+| Generator in line 1 | `TeklaStructures` / `Tekla Structures` | `AdvanceSteel` |
+| `D` fields | always 16 | 17 |
+| Record types present | `KISS H * D S A` only | `KISS H * D S` |
+| Not present anywhere | `M W L C`, address `A` | same |
+| Metric flag (H field 6) | `F` (imperial sizes) | `F` |
+| Revision (D 2) | `0`, but `1` on TL1301 (revised parts) | `2` on most lines |
+| Finish (D 10) | `3-1`, `0-0` (25-351); `2-9` (26-418); blank on all plates and hardware | `SEE NOTE` on every line |
+| Notes (D 11) | `COLUMN(C8)`, `BASE_PLATE`, ... | blank |
+| Part name (D 12) | always blank | `beam` / `plate` |
+| Cost code (D 13) | `23`, `3`, `2`, `0`, `8`, `8-22`... | blank |
+| Gross weight (D 14) | always blank | filled (e.g. `81.93`) |
+| Net weight (D 15) | `0.0` on parts, blank on main marks | filled |
+| Net area (D 16) | not present | filled |
+| `S` line | 3 fields, one per assembly | 4 fields (trailing empty lot name) |
+| `A` line | one per assembly after `S`, e.g. `A,520301-02` | none |
+
+Consequences:
+
+- **Weights in the BOM are not real for Tekla files.** Those files carry no weight at all. On main marks the parser's "last numeric field" is the cost code (e.g. 23, 8, 17), and on parts it is the `0.0` net weight. Advance Steel files do carry real weights in fields 14 and 15.
+- **Finish values are job codes**, not paint names (`3-1`, `2-9`), so what they mean depends on the customer. They are the COATING column on the QPR and must be passed through untouched.
+- **Transmittal is not in the file.** It comes from the file name (`TL1313`). The filtered output now writes it to the `S` line lot name so it survives without touching Finish.

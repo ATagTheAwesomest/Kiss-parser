@@ -1233,6 +1233,9 @@ function Write-FilteredAssemblyKssFile ($MasterData, $AssemblyDrawings, $Project
                     Finish      = $first.Finish
                     Description = $first.Description
                     Weight      = $first.Weight
+                    Rev         = $first.Rev
+                    Tail        = $first.Tail
+                    TL          = $first.TL
                 }
             } |
             Sort-Object PartMark
@@ -1240,11 +1243,14 @@ function Write-FilteredAssemblyKssFile ($MasterData, $AssemblyDrawings, $Project
 
         foreach ($item in $uniqueItems) {
             $safeDesc = ($item.Description -replace ',', ';')
+            # Fields 12+ (part name, cost code, weights, area) are passed through untouched; Finish (field 10) is never altered.
+            $rev  = if ($item.Rev) { $item.Rev } else { "0" }
+            $tail = if ($null -ne $item.Tail) { @($item.Tail) } else { @("", $item.Weight) }
             $fields = @(
-                "D", $item.Assembly, "0", $item.MainMark, $item.RawPartMark, $item.Qty,
+                "D", $item.Assembly, $rev, $item.MainMark, $item.RawPartMark, $item.Qty,
                 $item.Shape, $item.Size, $item.Grade, $item.Length, $item.Finish,
-                $safeDesc, "", $item.Weight
-            )
+                $safeDesc
+            ) + $tail
             $lines.Add(($fields -join ','))
         }
 
@@ -1253,7 +1259,9 @@ function Write-FilteredAssemblyKssFile ($MasterData, $AssemblyDrawings, $Project
         $assemblyQty = ($uniqueItems | Where-Object { $_.PartMark -eq $_.Assembly -or $_.RawPartMark -eq $_.Assembly } | Measure-Object -Property Qty -Sum).Sum
         if (-not $assemblyQty) { $assemblyQty = ($uniqueItems | Measure-Object -Property Qty -Sum).Sum }
         if (-not $assemblyQty) { $assemblyQty = 1 }
-        $lines.Add("S,$prefix,$assemblyQty")
+        # Transmittal travels in the KISS 'lot name' slot of the S line (v1.1 field 3), not in Finish.
+        $lotName = ($uniqueItems | Where-Object { $_.TL } | Select-Object -First 1).TL
+        if ($lotName) { $lines.Add("S,$prefix,$assemblyQty,$lotName") } else { $lines.Add("S,$prefix,$assemblyQty") }
 
         if ($AssemblyDrawings.ContainsKey($assmName) -and $AssemblyDrawings[$assmName]) {
             $lines.Add("A,$($AssemblyDrawings[$assmName])")
@@ -1467,6 +1475,8 @@ else {
                         Finish      = $finish
                         Description = $desc
                         Weight      = $weight
+                        Rev         = $parts[2].Trim()
+                        Tail        = @($parts | Select-Object -Skip 12 | ForEach-Object { $_.Trim() })
                         Category    = $category
                         SourceFile  = $file.Name
                         TL          = $file.TL

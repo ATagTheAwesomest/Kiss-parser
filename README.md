@@ -24,14 +24,16 @@ software) into the shop's working documents.
 
 ## Options
 
-Run with no options and the script behaves exactly as it always has. Both switches are off by default.
+No options are needed for a normal run. The script asks everything on screen, with colored menus: cyan frames, yellow titles, green `[X]` choices and prompts, gray examples.
 
-| Switch | Effect |
+By default the filtered `.kss` keeps Finish/coating exactly as received and writes the transmittal (TL) into the cost code / pay category slot (D field 13).
+
+| Switch (optional) | Effect |
 | --- | --- |
-| `-TransmittalInCostCode` | Filtered `.kss`: Finish/coating stays as received and the TL is written in the cost code / pay category slot (D field 13). Revision and fields 12+ are kept as received. |
-| `-StandardWeight` | BOM weight is read from KISS fields 14/15 (gross, else net, else 0) instead of the last numeric field on the line. |
+| `-TransmittalInFinish` | Old behavior: write the TL over Finish/coating (D field 10) instead. Only for reproducing old output. |
+| `-StandardWeight` | BOM weight is read from KISS fields 14/15 (gross, else net, else 0) instead of the last numeric field on the line. Off by default. |
 
-Example: `powershell -ExecutionPolicy Bypass -File <path to KISS>\tools\Parse-KSS.ps1 -TransmittalInCostCode`
+Quality Process Report: each sheet is named `{job} - {TL}`, or `{job} - {TL} - {sequence}` when sorted by sequence, and the "Job:" box on the sheet shows the same text. Excel cuts sheet names at 31 characters; the Job: box shows the full text.
 
 ## Run
 

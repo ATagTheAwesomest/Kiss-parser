@@ -498,8 +498,13 @@ function Add-FolderLabelSheet {
         $jobParts = @($OurJob, $AfcoJob, $label.TL) | Where-Object { $_ }
         $cell1 = $sheet.Range($sheet.Cells.Item($r1, 1), $sheet.Cells.Item($r1, 2))
         $cell1.Merge()
-        $cell1.Value2 = ($jobParts -join " - ")
+        $line1 = ($jobParts -join " - ")
+        $cell1.Value2 = $line1
         $cell1.Font.Size = 22
+        if ($label.IsRev) {                      # REV transmittal: the R in TLR#### is italic
+            $rPos = $line1.LastIndexOf($label.TL) + 3
+            $cell1.Characters($rPos, 1).Font.Italic = $true
+        }
         $cell1.HorizontalAlignment = -4108
         $cell1.VerticalAlignment = -4108
         $cell1.ShrinkToFit = $true

@@ -137,7 +137,7 @@ The `Explanation` row is not used. The other tabs in that workbook are formulas 
 
 | Line | Content |
 |---|---|
-| 1 (big) | `<our job> - <AFCO job> - <TL>`, e.g. `26102 - 25351 - TL1296`. Our job is typed at the prompt (default: leading digits of the Required Assm file name). AFCO job is the KSS header job number with dashes removed (`25-351` becomes `25351`). |
+| 1 (big) | `<our job> - <AFCO job> - <TL>`, e.g. `26102 - 25351 - TL1296`. On a REV (`TLR1301`) only the `R` is italic. Our job is typed at the prompt (default: leading digits of the Required Assm file name). AFCO job is the KSS header job number with dashes removed (`25-351` becomes `25351`). |
 | 2 (small) | Left: `<project name> - <due date>`. Right: coating. |
 | 3 (big) | Sequences, e.g. `5131 - 5132`. |
 

@@ -7,13 +7,73 @@
 #>
 
 param(
-    # Keep Finish/coating (D field 10) as received and write the transmittal into the cost code / pay category slot (D field 13) instead.
-    [switch]$TransmittalInCostCode,
+    # Legacy behavior: write the transmittal over Finish/coating (D field 10) in the filtered .kss.
+    # Default: Finish stays as received and the transmittal goes in the cost code / pay category slot (D field 13).
+    [switch]$TransmittalInFinish,
     # Read part weight from KISS fields 14 (gross) / 15 (net) instead of the last numeric field on the line.
     [switch]$StandardWeight
 )
 
 $ErrorActionPreference = "Stop"
+
+# --- COLORED CONSOLE OUTPUT ---
+# Menus and prompts are colored so a new operator can scan them: cyan frames, yellow titles,
+# green [X] choices and prompts, gray examples. Calls that pass their own color are left alone.
+$script:FrameState = 0   # 0 = none, 1 = just printed an opening ==== line, 2 = just printed the title
+function Write-Host {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0, ValueFromRemainingArguments = $true)]$Object,
+        [switch]$NoNewline,
+        $Separator = ' ',
+        [System.ConsoleColor]$ForegroundColor,
+        [System.ConsoleColor]$BackgroundColor
+    )
+    if ($PSBoundParameters.ContainsKey('ForegroundColor') -or $PSBoundParameters.ContainsKey('BackgroundColor') -or $NoNewline) {
+        Microsoft.PowerShell.Utility\Write-Host @PSBoundParameters
+        return
+    }
+    $text = ($Object | ForEach-Object { "$_" }) -join $Separator
+    $state = $script:FrameState
+    $script:FrameState = 0
+    if ($text -match '^=+$') {
+        if ($state -eq 0) { $script:FrameState = 1 }
+        Microsoft.PowerShell.Utility\Write-Host $text -ForegroundColor Cyan
+    }
+    elseif ($state -eq 1 -and $text.Trim()) {
+        $script:FrameState = 2
+        Microsoft.PowerShell.Utility\Write-Host $text -ForegroundColor Yellow
+    }
+    elseif ($text -match '^(\s*)(\[[^\]]+\]\w*)(.*)$') {
+        Microsoft.PowerShell.Utility\Write-Host $Matches[1] -NoNewline
+        Microsoft.PowerShell.Utility\Write-Host $Matches[2] -ForegroundColor Green -NoNewline
+        $rest = $Matches[3]
+        if ($rest -match '^(.*?)(\(default[^)]*\))(.*)$') {
+            Microsoft.PowerShell.Utility\Write-Host $Matches[1] -NoNewline
+            Microsoft.PowerShell.Utility\Write-Host $Matches[2] -ForegroundColor Yellow -NoNewline
+            Microsoft.PowerShell.Utility\Write-Host $Matches[3]
+        }
+        else { Microsoft.PowerShell.Utility\Write-Host $rest }
+    }
+    elseif ($text -match '^\s*(Example|Files|Sheets|Note)\b') {
+        Microsoft.PowerShell.Utility\Write-Host $text -ForegroundColor DarkGray
+    }
+    elseif ($text -match '^\s*(Use for|-\s)') {
+        Microsoft.PowerShell.Utility\Write-Host $text -ForegroundColor Gray
+    }
+    elseif ($text -match '^\s*(WITH |Simple list)') {
+        Microsoft.PowerShell.Utility\Write-Host $text -ForegroundColor Yellow
+    }
+    else {
+        Microsoft.PowerShell.Utility\Write-Host $text
+    }
+}
+
+function Read-Host {
+    param([Parameter(Position = 0)][string]$Prompt)
+    if ($Prompt) { Microsoft.PowerShell.Utility\Write-Host "${Prompt}: " -ForegroundColor Green -NoNewline }
+    Microsoft.PowerShell.Utility\Read-Host
+}
 
 # --- HELPER FUNCTIONS ---
 function Write-Log ($Message, $Color = "Cyan") {
@@ -583,10 +643,10 @@ function Apply-AssemblyWhitelist {
             if ($hasTlMap) {
                 if ($tlMap.ContainsKey($assmKey)) {
                     $item.TL = $tlMap[$assmKey]
-                    if (-not $TransmittalInCostCode) { $item.Finish = $tlMap[$assmKey] }
+                    if ($TransmittalInFinish) { $item.Finish = $tlMap[$assmKey] }
                 } else {
                     $item.TL = ""
-                    if (-not $TransmittalInCostCode) { $item.Finish = "" }
+                    if ($TransmittalInFinish) { $item.Finish = "" }
                 }
             }
             $filteredMaster.Add($item)
@@ -1252,7 +1312,7 @@ function Write-FilteredAssemblyKssFile ($MasterData, $AssemblyDrawings, $Project
 
         foreach ($item in $uniqueItems) {
             $safeDesc = ($item.Description -replace ',', ';')
-            if ($TransmittalInCostCode) {
+            if (-not $TransmittalInFinish) {
                 # Finish (field 10) is untouched; the TL goes in the cost code slot (field 13); revision and fields 12+ pass through.
                 $rev  = if ($item.Rev) { $item.Rev } else { "0" }
                 $tail = if ($null -ne $item.Tail -and @($item.Tail).Count -ge 2) { @($item.Tail) } else { @("", "", $item.Weight) }
@@ -3107,10 +3167,11 @@ function Write-QualityProcessReport {
     if ($GroupBy -eq "TL") {
         $groups = @($MasterData | Group-Object TL | Sort-Object Name)
     } elseif ($GroupBy -eq "Sequence") {
-        # Extract first 4 digits of assembly as sequence
+        # One sheet per TL + sequence (first 4 digits of assembly), so the sequence sheets still say which TL they came from
         $groups = @($MasterData | Group-Object {
             $assm = $_.Assembly
-            if ($assm -match '^(\d{4})') { $Matches[1] } else { $assm.Substring(0, [Math]::Min(4, $assm.Length)) }
+            $seq = if ($assm -match '^(\d{4})') { $Matches[1] } else { $assm.Substring(0, [Math]::Min(4, $assm.Length)) }
+            "$($_.TL)`t$seq"
         } | Sort-Object Name)
     } else {
         $groups = @($MasterData | Group-Object Assembly | Sort-Object Name)
@@ -3149,11 +3210,19 @@ function Write-QualityProcessReport {
         $sheetIndex = 0
         foreach ($grp in $groups) {
             $sheetIndex++
-            $groupKey  = if ($grp.Name) { $grp.Name } else { "(No TL)" }
-            # Prepend job number if provided
-            $jobPrefix = if ($QprJobNumber) { "$QprJobNumber - " } else { "" }
-            $sheetName = "$jobPrefix$groupKey"
-            $sheetName = ($sheetName -replace '[\\\/\?\*\[\]\:]', '_')
+            # Sheet / job label: {job} - {TL}, or {job} - {TL} - {sequence} when grouped by sequence
+            $labelParts = @()
+            if ($QprJobNumber) { $labelParts += $QprJobNumber }
+            if ($GroupBy -eq "Sequence") {
+                $seqTl, $seqNum = $grp.Name -split "`t", 2
+                if ($seqTl) { $labelParts += $seqTl }
+                $labelParts += $seqNum
+            }
+            else {
+                $labelParts += $(if ($grp.Name) { $grp.Name } else { "(No TL)" })
+            }
+            $jobLabel  = $labelParts -join " - "
+            $sheetName = ($jobLabel -replace '[\\\/\?\*\[\]\:]', '_')
             if ($sheetName.Length -gt 31) { $sheetName = $sheetName.Substring(0, 31) }
 
             $ws = if ($sheetIndex -eq 1) {
@@ -3206,13 +3275,14 @@ function Write-QualityProcessReport {
 
             # Job Number label R1C12:C13, value R1C14:C16 with bottom underline
             $ws.Range($ws.Cells.Item(1,12), $ws.Cells.Item(1,13)).Merge()
-            $ws.Cells.Item(1,12).Value2    = "Job Number:"
+            $ws.Cells.Item(1,12).Value2    = "Job:"
             $ws.Cells.Item(1,12).Font.Name = "Arial Narrow"
             $ws.Cells.Item(1,12).Font.Bold = $true
             $jnRange = $ws.Range($ws.Cells.Item(1,14), $ws.Cells.Item(1,16))
             $jnRange.Merge()
-            $ws.Cells.Item(1,14).Value2    = $JobNumber
+            $ws.Cells.Item(1,14).Value2    = $jobLabel   # mirrors the sheet name (Excel cuts sheet names at 31 characters, this cell does not)
             $ws.Cells.Item(1,14).Font.Name = "Arial Narrow"
+            $jnRange.ShrinkToFit = $true
             Set-BorderSide $jnRange 9 $xlContinuous $xlThin   # bottom underline
 
             # Inspector R2C12:C13, write-in area R2C14:C16 top+bottom lines
@@ -3409,9 +3479,9 @@ Write-Host ""
 $qprChoice = Read-Host "Generate Quality Process Report (QPR)? [Y]es / [N]o (default: No)"
 if ($qprChoice -match '^(y|yes)$') {
     Write-Host ""
-    Write-Host "  Job Number for QPR sheets (used as sheet prefix)"
+    Write-Host "  Job name for the QPR (used as the sheet prefix and printed in the Job: box on each sheet)"
     Write-Host "  Example: enter '25-351' -> sheets named '25-351 - TL1282', '25-351 - TL1296', etc."
-    $qprJobInput = Read-Host "Job Number (default: $jobNumber)"
+    $qprJobInput = Read-Host "Job name (default: $jobNumber)"
     $qprJobNumber = if ($qprJobInput) { $qprJobInput } else { $jobNumber }
 
     Write-Host ""
@@ -3420,8 +3490,8 @@ if ($qprChoice -match '^(y|yes)$') {
     Write-Host "    Sheets: $qprJobNumber - TL1282 | $qprJobNumber - TL1296 | $qprJobNumber - TL1301"
     Write-Host "    Use for: Manufacturing by transmittal/revision phase"
     Write-Host ""
-    Write-Host "  [S]equence: Organize by Sequence (first 4 digits of assembly)"
-    Write-Host "    Sheets: $qprJobNumber - 5131 | $qprJobNumber - 5132 | $qprJobNumber - 5133"
+    Write-Host "  [S]equence: Organize by Sequence (first 4 digits of assembly), still labeled with the TL"
+    Write-Host "    Sheets: $qprJobNumber - TL1296 - 5131 | $qprJobNumber - TL1296 - 5132 | $qprJobNumber - TL1313 - 5133"
     Write-Host "    Use for: Manufacturing by structural family/sequence"
     Write-Host ""
     $qprGroupChoice = Read-Host "Organize sheets by [T]L number (default) or [S]equence?"

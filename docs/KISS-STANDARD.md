@@ -55,7 +55,7 @@ Idx 1 Description (Owner, Architect, Engineer, General, Erector, Job Site), 2 Na
 | 15 | Part net weight | 7.2 | No | v1.1 | No |
 | 16 | Part net area | 7.2 | No | v1.1; plates only; ft2 imperial, m2 metric | No |
 
-**Weight:** by default the parser takes the last numeric field on the line, which can be the cost code (field 13) or the length. `-StandardWeight` reads field 14, else 15, else 0. Also, `Parse-KSS.ps1` writes its Filtered Assemblies files with weight in index 13 (the cost-code slot) unless `-TransmittalInCostCode` is on.
+**Weight:** by default the parser takes the last numeric field on the line, which can be the cost code (field 13) or the length. `-StandardWeight` reads field 14, else 15, else 0. Also, `Parse-KSS.ps1` writes its Filtered Assemblies files with weight in index 13 (the cost-code slot) only when `-TransmittalInFinish` is used.
 
 ### Shape codes (field 6)
 
@@ -160,4 +160,4 @@ Consequences:
 
 - **Tekla files carry no weight.** By default the BOM weight on main marks is the cost code (e.g. 23, 8, 17) and 0 on parts; `-StandardWeight` shows 0 for all of them. Advance Steel files carry real weights in fields 14 and 15.
 - **Finish values are job codes**, not paint names (`3-1`, `2-9`), so what they mean depends on the customer. They are the COATING column on the QPR and must be passed through untouched.
-- **Transmittal is not in the file.** It comes from the file name (`TL1313`). With `-TransmittalInCostCode` the filtered output writes it to the cost code slot (D field 13, the "pay category") and leaves Finish alone.
+- **Transmittal is not in the file.** It comes from the file name (`TL1313`). The filtered output writes it to the cost code slot (D field 13, the "pay category") and leaves Finish alone.

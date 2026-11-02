@@ -1,6 +1,6 @@
 # KISS: How `Parse-KSS.ps1` Reads Its Input Files
 
-Draft README for the KISS tool (source: `KISS/Parse-KSS.ps1`, about 3,390 lines of PowerShell). Written from reading the script and the sample `.kss` files in the project folder. Meant to later feed an SOP. The script was not modified or run.
+The official field-by-field format is in [KISS-STANDARD.md](KISS-STANDARD.md); note that its column names differ from the labels used below (e.g. D field 1 is the standard's "Drawing no", field 11 is "Notes", and weights live in fields 14/15). Draft README for the KISS tool (source: `KISS/Parse-KSS.ps1`, about 3,390 lines of PowerShell). Written from reading the script and the sample `.kss` files in the project folder. Meant to later feed an SOP. The script was not modified or run.
 
 ## 1. What it does
 
@@ -45,7 +45,7 @@ The sample files in the folder contain no `L` lines, so the labor tab is probabl
 
 | Index | Field | Notes |
 |---|---|---|
-| 1 | Assembly ID | e.g. `52031000`. First 4 digits are the sequence (e.g. 5203) |
+| 1 | Assembly ID (standard: Drawing no) | e.g. `52031000`. First 4 digits are the sequence (e.g. 5203) |
 | 3 | Main mark | Mark of the assembly's main part |
 | 4 | Part mark | e.g. `3bp43`. **Blank for loose hardware**; the script then builds a mark (section 4) |
 | 5 | Qty | Must be an integer, or the whole line is silently skipped |
@@ -53,9 +53,9 @@ The sample files in the folder contain no `L` lines, so the labor tab is probabl
 | 7 | Size | e.g. `3/4X7` for plates (thickness X width), `6X6X3/8` for HSS |
 | 8 | Grade | e.g. `A572-50` |
 | 9 | Length | Looks like millimeters in the samples (`7035.80`) but the script stores it as text and does not convert |
-| 10 | Finish | Optional; also reused as the TL tag when a whitelist assigns TLs |
-| 11 | Description | Optional, e.g. `SHEAR_PLATE` |
-| last numeric | Unit weight | See gotcha 1 |
+| 10 | Finish / coating | Optional free text from the detailer, e.g. `3-1`, `0-0`, `SEE NOTE`, or blank. Shown as COATING on the QPR. Overwritten by the TL in filtered files unless `-TransmittalInCostCode` is used (gotcha 12) |
+| 11 | Description (standard: Notes) | Optional, e.g. `SHEAR_PLATE` |
+| last numeric | Unit weight | See gotcha 1 (`-StandardWeight` reads fields 14/15). Field 13 is the cost code |
 
 A `D` line must have at least 10 comma-separated fields to be accepted. Fields are split on commas with no quote handling, so a comma inside a description would shift every later column. The script's own generated KSS files replace commas in descriptions with `;` for this reason.
 
@@ -110,7 +110,7 @@ REV override keeps the newest TL (highest number in the file name) for each asse
 
 **File naming:** `<Project> - Job <Job> - <TL1>_<TL2>... BOM.xlsx`. If the old file is locked, a timestamp is appended instead. With many TLs the name is shortened to `<first>-<last> (n TLs)`.
 
-**Filtered KSS:** `... - Filtered Assemblies.kss`, rebuilt from the kept data. Sorted by assembly. If an assembly appears in several files, only the first selected file's version is used. The script then re-reads it with its integrity check (`Test-KissAssemblyIntegrity`): every `D` block must have 12+ fields and a numeric qty, each assembly must end with a matching `S` line, the `S` qty must match the main-part qty, and only `KISS/H/D/S/A/*/END` record types are allowed. A failed check deletes the file and stops the script. The "- VALID" files in the folder were made by a separate script (`build_valid_filtered_kiss.py`).
+**Filtered KSS:** `... - Filtered Assemblies.kss`, rebuilt from the kept data. Sorted by assembly. If an assembly appears in several files, only the first selected file's version is used. The script then re-reads it with its integrity check (`Test-KissAssemblyIntegrity`): every `D` block must have 12+ fields and a numeric qty, each assembly must end with a matching `S` line, the `S` qty must match the main-part qty, and only `KISS/H/D/S/A/*/END` record types are allowed. A failed check deletes the file and stops the script.
 
 **Shop scripts (only generated if the selection has plates):**
 - `Sort-PlatesByThickness - <label>.bat`: moves each `<partmark>.dxf` into a folder named by decimal thickness. It looks in a `dxf\` subfolder if one exists, otherwise the batch file's own folder. Reports moved and missing counts.
@@ -123,7 +123,7 @@ Reads a post schedule with `Import-Csv`. Required column: `Post ID` (rows withou
 
 ## 8. Gotchas and risks (things the SOP should cover)
 
-1. **Weight can be wrong.** The script takes the unit weight from the *last field that parses as a number*, scanning right to left. When a `D` line has no trailing weight (like the first sample row, ending `...,COLUMN(TS-C),,8-22,,`), the scan runs back to the **length** field and uses it (7035.80) as the weight. Where a trailing `0` or `0.0` exists, the weight is 0. Weights in the BOM should be spot-checked before use.
+1. **Weight can be wrong (default behavior).** The script takes the unit weight from the *last field that parses as a number*, scanning right to left. On Tekla files, which carry no weight, that is the cost code on main marks (e.g. 23) and `0.0` on parts. Run with `-StandardWeight` to read gross weight (field 14), else net (field 15), else 0 instead. Spot-check weights either way.
 2. **Length units are not converted** for KSS files (mm in the samples). Do not read the Length column as inches or feet.
 3. **Rows can vanish silently:** a `D` line with a non-integer qty or fewer than 10 fields is skipped without a warning.
 4. **No quote handling** in `D` lines (commas inside text break the columns).
@@ -134,6 +134,7 @@ Reads a post schedule with `Import-Csv`. Required column: `Post ID` (rows withou
 9. **Typing macros are timing-based** (SendKeys with fixed delays) and type into whatever window has focus. The operator must not touch the keyboard during a run.
 10. **Output goes to the current folder** and old outputs are not cleaned up. That is why the folder holds many dated BOM and QPR workbooks.
 11. The script file is about 150 KB with Excel layout code making up most of it; the actual parsing is roughly lines 1,380–1,480 (KSS) and 966–1,115 (Soundwall).
+12. **Whitelist TLs overwrite Finish (default behavior).** When a whitelist assigns TLs, the filtered `.kss` carries the TL in field 10 (Finish/coating) in place of the original value (`3-1`, `0-0`, `2-9`, `SEE NOTE`, blank). Run with `-TransmittalInCostCode` to leave Finish as received and write the TL into field 13 (cost code / pay category) instead; that mode also keeps each line's drawing revision (field 2) and fields 12+ as received instead of rewriting revision as `0`. Filtered files made earlier still have the TL in field 10; re-run from the original `.kss`.
 
 ## 9. Open questions for Andrew
 

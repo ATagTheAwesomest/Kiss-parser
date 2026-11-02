@@ -6,6 +6,13 @@
     and A-Z Ordered Auto-Type Quantities Batch Generator.
 #>
 
+param(
+    # Keep Finish/coating (D field 10) as received and write the transmittal into the cost code / pay category slot (D field 13) instead.
+    [switch]$TransmittalInCostCode,
+    # Read part weight from KISS fields 14 (gross) / 15 (net) instead of the last numeric field on the line.
+    [switch]$StandardWeight
+)
+
 $ErrorActionPreference = "Stop"
 
 # --- HELPER FUNCTIONS ---
@@ -576,10 +583,10 @@ function Apply-AssemblyWhitelist {
             if ($hasTlMap) {
                 if ($tlMap.ContainsKey($assmKey)) {
                     $item.TL = $tlMap[$assmKey]
-                    $item.Finish = $tlMap[$assmKey]
+                    if (-not $TransmittalInCostCode) { $item.Finish = $tlMap[$assmKey] }
                 } else {
                     $item.TL = ""
-                    $item.Finish = ""
+                    if (-not $TransmittalInCostCode) { $item.Finish = "" }
                 }
             }
             $filteredMaster.Add($item)
@@ -1235,6 +1242,9 @@ function Write-FilteredAssemblyKssFile ($MasterData, $AssemblyDrawings, $Project
                     Finish      = $first.Finish
                     Description = $first.Description
                     Weight      = $first.Weight
+                    Rev         = $first.Rev
+                    Tail        = $first.Tail
+                    TL          = $first.TL
                 }
             } |
             Sort-Object PartMark
@@ -1242,11 +1252,24 @@ function Write-FilteredAssemblyKssFile ($MasterData, $AssemblyDrawings, $Project
 
         foreach ($item in $uniqueItems) {
             $safeDesc = ($item.Description -replace ',', ';')
-            $fields = @(
-                "D", $item.Assembly, "0", $item.MainMark, $item.RawPartMark, $item.Qty,
-                $item.Shape, $item.Size, $item.Grade, $item.Length, $item.Finish,
-                $safeDesc, "", $item.Weight
-            )
+            if ($TransmittalInCostCode) {
+                # Finish (field 10) is untouched; the TL goes in the cost code slot (field 13); revision and fields 12+ pass through.
+                $rev  = if ($item.Rev) { $item.Rev } else { "0" }
+                $tail = if ($null -ne $item.Tail -and @($item.Tail).Count -ge 2) { @($item.Tail) } else { @("", "", $item.Weight) }
+                if ($item.TL) { $tail[1] = $item.TL }
+                $fields = @(
+                    "D", $item.Assembly, $rev, $item.MainMark, $item.RawPartMark, $item.Qty,
+                    $item.Shape, $item.Size, $item.Grade, $item.Length, $item.Finish,
+                    $safeDesc
+                ) + $tail
+            }
+            else {
+                $fields = @(
+                    "D", $item.Assembly, "0", $item.MainMark, $item.RawPartMark, $item.Qty,
+                    $item.Shape, $item.Size, $item.Grade, $item.Length, $item.Finish,
+                    $safeDesc, "", $item.Weight
+                )
+            }
             $lines.Add(($fields -join ','))
         }
 
@@ -1429,10 +1452,26 @@ else {
                     if (-not [int]::TryParse($parts[5].Trim(), [ref]$qty)) { continue }
 
                     $weight = 0.00
-                    for ($idx = $parts.Length - 1; $idx -ge 0; $idx--) {
-                        $candidate = $parts[$idx].Trim()
-                        if ($candidate -and [decimal]::TryParse($candidate, [ref]$weight)) {
-                            break
+                    if ($StandardWeight) {
+                        # KISS v1.1: field 14 = gross part weight, field 15 = net. Blank/absent = 0 (Tekla exports carry none).
+                        $weight = [decimal]0
+                        foreach ($wIdx in 14, 15) {
+                            if ($parts.Length -gt $wIdx) {
+                                $candidate = $parts[$wIdx].Trim()
+                                $parsedWeight = [decimal]0
+                                if ($candidate -and [decimal]::TryParse($candidate, [ref]$parsedWeight) -and $parsedWeight -gt 0) {
+                                    $weight = $parsedWeight
+                                    break
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        for ($idx = $parts.Length - 1; $idx -ge 0; $idx--) {
+                            $candidate = $parts[$idx].Trim()
+                            if ($candidate -and [decimal]::TryParse($candidate, [ref]$weight)) {
+                                break
+                            }
                         }
                     }
 
@@ -1469,6 +1508,8 @@ else {
                         Finish      = $finish
                         Description = $desc
                         Weight      = $weight
+                        Rev         = $parts[2].Trim()
+                        Tail        = @($parts | Select-Object -Skip 12 | ForEach-Object { $_.Trim() })
                         Category    = $category
                         SourceFile  = $file.Name
                         TL          = $file.TL

@@ -793,7 +793,9 @@ function Get-WorkOrderPages {
         foreach ($p in $parts) { $wt += Get-KssPartWeight $p.Shape $p.Size $p.Length $p.Qty }
         $size = "$($main.Size)"
         $desc = if ($size -match '^[A-Za-z]') { $size } else { "$($main.Shape)$size" }
-        $desc = $desc -replace '(?i)x', ' x '
+        # "HSS16X8X1/2" -> "HSS16 x 8 x 1/2", "SHT10GAX5-1/2" -> "SHT10ga x 5 1/2"
+        $desc = $desc -replace '(?<=[\d/]|GA)[xX](?=[\d.])', ' x '
+        $desc = ($desc -replace '(\d)-(\d+/\d+)', '$1 $2') -creplace '(?<=\d)GA', 'ga'
         $assm = "$($main.Assembly)"
         $seq = if ($assm.Length -ge 4) { $assm.Substring(0, 4) } else { $assm }
         $tl = "$($main.TL)"

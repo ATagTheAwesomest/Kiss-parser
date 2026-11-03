@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Professional KSS to Excel Nesting, Hardware Takeoff & Shop Management Engine.
     Includes Master BOM, PL/SHT/BPL Nesting, Profiles, Hardware & Fasteners, 
@@ -509,7 +509,7 @@ function Read-RequiredAssm {
     return @($result | Sort-Object Number)
 }
 
-# Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 40.5 + 15 + 25.5 = 81 pt.
+# Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 40.5 + 15 + 24.75 + 0.75 (spacer so the bottom border prints) = 81 pt.
 # Margins are 0 and the page is set to fit all columns on one page, so the text stays inside the printable area.
 function Add-FolderLabelSheet {
     param($Workbook, $Labels, [string]$OurJob, [string]$Title, [string]$CustomerJob, [string]$IssuedBy)
@@ -538,11 +538,12 @@ function Add-FolderLabelSheet {
     # Alignment constants: xlLeft = -4131, xlRight = -4152, xlCenter = -4108
     $i = 0
     foreach ($label in $Labels) {
-        $r1 = 3 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2
+        $r1 = 4 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2; $r4 = $r1 + 3
 
         $sheet.Rows.Item($r1).RowHeight = 40.5
         $sheet.Rows.Item($r2).RowHeight = 15
-        $sheet.Rows.Item($r3).RowHeight = 25.5
+        $sheet.Rows.Item($r3).RowHeight = 24.75
+        $sheet.Rows.Item($r4).RowHeight = 0.75      # spacer: the page ends below the last border, so the bottom line is not clipped
 
         # Line 1: our job - transmittal - sequence (big)
         $jobParts = @($OurJob, $label.TL, $label.Sequence) | Where-Object { $_ }
@@ -558,6 +559,7 @@ function Add-FolderLabelSheet {
         $cell1.HorizontalAlignment = -4108
         $cell1.VerticalAlignment = -4108
         $cell1.ShrinkToFit = $true
+        Set-LabelCellBorder $cell1
 
         # Line 2 (small): project title - customer job on the left, "ISU'D: initials" on the right
         $cellL = $sheet.Cells.Item($r2, 1)
@@ -566,12 +568,14 @@ function Add-FolderLabelSheet {
         $cellL.HorizontalAlignment = -4131
         $cellL.VerticalAlignment = -4108
         $cellL.ShrinkToFit = $true
+        Set-LabelCellBorder $cellL
         $cellR = $sheet.Cells.Item($r2, 2)
         $cellR.Value2 = (@($IssuedLabel, $IssuedBy) | Where-Object { $_ }) -join " "
         $cellR.Font.Size = 10
         $cellR.HorizontalAlignment = -4152
         $cellR.VerticalAlignment = -4108
         $cellR.ShrinkToFit = $true
+        Set-LabelCellBorder $cellR
 
         # Line 3: comments / paint info on the left, due date on the right (blank date = slashes to fill in later)
         $cellC = $sheet.Cells.Item($r3, 1)
@@ -580,23 +584,35 @@ function Add-FolderLabelSheet {
         $cellC.HorizontalAlignment = -4131
         $cellC.VerticalAlignment = -4108
         $cellC.ShrinkToFit = $true
+        Set-LabelCellBorder $cellC
         $cellD = $sheet.Cells.Item($r3, 2)
         $cellD.Value2 = if ($label.DueDate) { "DUE $($label.DueDate)" } else { "DUE    /    /" }
         $cellD.Font.Size = 18
         $cellD.HorizontalAlignment = -4152
         $cellD.VerticalAlignment = -4108
         $cellD.ShrinkToFit = $true
+        Set-LabelCellBorder $cellD
 
         $i++
     }
 
-    $lastRow = 3 * $Labels.Count
+    $lastRow = 4 * $Labels.Count
     $sheet.Range("D1").Value2 = "Print this tab on the Dymo (3.5 x 1.125 in address label). One label per page."
     $sheet.Range("D1").Font.Bold = $false
     $sheet.Range("D1").Font.Italic = $true
 
-    Set-LabelPrintSetup -Sheet $sheet -LastCol "B" -RowsPerLabel 3 -LabelCount $Labels.Count
+    Set-LabelPrintSetup -Sheet $sheet -LastCol "B" -RowsPerLabel 4 -LabelCount $Labels.Count
     return $sheet
+}
+
+# Thin black border on all four edges of a label cell (applied to the whole range, so merged cells get a full outline).
+function Set-LabelCellBorder ($Range) {
+    foreach ($edge in 7, 8, 9, 10) {            # xlEdgeLeft, xlEdgeTop, xlEdgeBottom, xlEdgeRight
+        $b = $Range.Borders.Item($edge)
+        $b.LineStyle = 1                          # xlContinuous
+        $b.Weight = 2                             # xlThin
+        $b.Color = 0
+    }
 }
 
 # Print setup shared by the label tabs: one 3.5 x 1.125 in label per page, margins 0, fit all columns on one page.
@@ -664,10 +680,11 @@ function Add-TlLabelSheet {
 
     $i = 0
     foreach ($tl in $TLs) {
-        $r1 = 3 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2
+        $r1 = 4 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2; $r4 = $r1 + 3
         $sheet.Rows.Item($r1).RowHeight = 33
         $sheet.Rows.Item($r2).RowHeight = 30
-        $sheet.Rows.Item($r3).RowHeight = 18
+        $sheet.Rows.Item($r3).RowHeight = 17.25
+        $sheet.Rows.Item($r4).RowHeight = 0.75      # spacer: the page ends below the last border, so the bottom line is not clipped
 
         # Row 1: the transmittal (a REV gets the left 8 columns plus a small "REVISES ..." on the right 4)
         $revises = if ($tl.IsRev) { @(Get-RevisedTransmittals -Tl $tl -AllTLs $AllTLs -Sequences $tl.Sequences | ForEach-Object { $_.TL }) } else { @() }
@@ -679,6 +696,7 @@ function Add-TlLabelSheet {
         $tlCell.HorizontalAlignment = -4108
         $tlCell.VerticalAlignment = -4108
         $tlCell.ShrinkToFit = $true
+        Set-LabelCellBorder $tlCell
         if ($tl.IsRev) { $tlCell.Characters(3, 1).Font.Italic = $true }   # the R of TLR####
         if ($revises.Count -gt 0) {
             $revCell = $sheet.Range($sheet.Cells.Item($r1, 9), $sheet.Cells.Item($r1, 12))
@@ -688,6 +706,7 @@ function Add-TlLabelSheet {
             $revCell.HorizontalAlignment = -4152
             $revCell.VerticalAlignment = -4108
             $revCell.ShrinkToFit = $true
+            Set-LabelCellBorder $revCell
         }
 
         # Rows 2 and 3: each sequence big, its due date small underneath
@@ -706,6 +725,7 @@ function Add-TlLabelSheet {
             $seqCell.HorizontalAlignment = -4108
             $seqCell.VerticalAlignment = -4108
             $seqCell.ShrinkToFit = $true
+            Set-LabelCellBorder $seqCell
 
             $dueCell = $sheet.Range($sheet.Cells.Item($r3, $col), $sheet.Cells.Item($r3, $last))
             $dueCell.Merge()
@@ -714,14 +734,365 @@ function Add-TlLabelSheet {
             $dueCell.HorizontalAlignment = -4108
             $dueCell.VerticalAlignment = -4108
             $dueCell.ShrinkToFit = $true
+            Set-LabelCellBorder $dueCell
             $col = $last + 1
         }
         $i++
     }
 
-    Set-LabelPrintSetup -Sheet $sheet -LastCol "L" -RowsPerLabel 3 -LabelCount $TLs.Count
+    Set-LabelPrintSetup -Sheet $sheet -LastCol "L" -RowsPerLabel 4 -LabelCount $TLs.Count
     return $sheet
 }
+
+# --- TERRA WORK ORDER (one letter page per transmittal + sequence, laid out like the Tekla UDR_TERRA_Work_Order report) ---
+# Assembly weight comes from the KSS parts (Tekla exports carry no weights): rolled shapes by lb/ft x length, plates and bars by volume.
+function Get-KssPartWeight ($shape, $size, $lengthStr, $qty) {
+    $lengthIn = 0.0
+    $lenNum = 0.0
+    if ([double]::TryParse(("$lengthStr").Trim(), [ref]$lenNum)) { $lengthIn = $lenNum / 25.4 }   # KISS lengths are millimeters
+    $lengthFt = $lengthIn / 12
+    $s = "$shape".Trim().ToUpper()
+    $tok = @(("$size" -replace '"', '') -split '[xX]' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $steel = 0.2836   # lb per cubic inch
+    $each = 0.0
+    switch -Regex ($s) {
+        '^(PL|BPL|SHT|FB|BAR)$' {
+            if ($tok.Count -ge 2) { $each = [double](Get-DecimalThickness $tok[0]) * [double](Get-DecimalThickness $tok[1]) * $lengthIn * $steel }
+        }
+        '^(HSS|TS|TUBE)$' {
+            if ($tok.Count -ge 3) {
+                $b = [double](Get-DecimalThickness $tok[0]); $h = [double](Get-DecimalThickness $tok[1]); $t = [double](Get-DecimalThickness $tok[2])
+                $area = 2 * $t * ($b + $h - 2 * $t) - 3 * (4 - [Math]::PI) * $t * $t      # outside radius 2t, inside radius t
+                $each = $area * 3.4026 * $lengthFt      # lb/ft per in2 that reproduces the AISC tube weights (HSS16X8X1/2 = 76.07 lb/ft)
+            }
+            elseif ($tok.Count -eq 2) {
+                $d = [double](Get-DecimalThickness $tok[0]); $t = [double](Get-DecimalThickness $tok[1])
+                $each = [Math]::PI / 4 * ($d * $d - [Math]::Pow($d - 2 * $t, 2)) * $steel * 12 * $lengthFt
+            }
+        }
+        '^L$' {
+            if ($tok.Count -ge 3) {
+                $a = [double](Get-DecimalThickness $tok[0]); $b = [double](Get-DecimalThickness $tok[1]); $t = [double](Get-DecimalThickness $tok[2])
+                $each = $t * ($a + $b - $t) * $steel * 12 * $lengthFt
+            }
+        }
+        '^(W|M|S|HP|C|MC|WT|MT|ST)$' {
+            if ($size -match '[Xx](\d+(?:\.\d+)?)\s*$') { $each = [double]$Matches[1] * $lengthFt }   # AISC designation ends in lb/ft
+        }
+    }
+    return $each * $qty
+}
+
+# "37'-7 13/16" from a KISS length in millimeters (nearest 1/16")
+function Format-FeetInches16 ($lengthStr) {
+    $mm = 0.0
+    if (-not [double]::TryParse(("$lengthStr").Trim(), [ref]$mm)) { return "$lengthStr" }
+    $sixteenths = [int][Math]::Round($mm / 25.4 * 16, [MidpointRounding]::AwayFromZero)
+    $feet = [Math]::Floor($sixteenths / 192)
+    $rem = $sixteenths - $feet * 192
+    $inches = [Math]::Floor($rem / 16)
+    $frac = $rem - $inches * 16
+    $out = "$feet'-$inches"
+    if ($frac -gt 0) {
+        $g = $frac; $d = 16
+        while ($g % 2 -eq 0 -and $d % 2 -eq 0 -and $g -gt 0) { $g /= 2; $d /= 2 }
+        $out += " $g/$d"
+    }
+    return $out
+}
+
+# One row per assembly: Item data for the report. Part qtys in a KISS D block are totals for the assembly qty.
+function Get-WorkOrderPages {
+    param($MasterData, $SeqNotes, [string]$DefaultNotes = "NO PAINT", $RevAssemblies = $null, $TlNames = $null, $DueDates = $null)
+
+    $rows = foreach ($g in ($MasterData | Group-Object -Property TL, Assembly)) {
+        $parts = @($g.Group)
+        $main = @($parts | Where-Object { $_.PartMark -eq $_.MainMark -and $_.Assembly -eq $_.MainMark })[0]
+        if (-not $main) { $main = $parts[0] }
+        $asmQty = [int]$main.Qty; if ($asmQty -lt 1) { $asmQty = 1 }
+        $wt = 0.0
+        foreach ($p in $parts) { $wt += Get-KssPartWeight $p.Shape $p.Size $p.Length $p.Qty }
+        $size = "$($main.Size)"
+        $desc = if ($size -match '^[A-Za-z]') { $size } else { "$($main.Shape)$size" }
+        # "HSS16X8X1/2" -> "HSS16 x 8 x 1/2", "SHT10GAX5-1/2" -> "SHT10ga x 5 1/2"
+        $desc = $desc -replace '(?<=[\d/]|GA)[xX](?=[\d.])', ' x '
+        $desc = ($desc -replace '(\d)-(\d+/\d+)', '$1 $2') -creplace '(?<=\d)GA', 'ga'
+        $assm = "$($main.Assembly)"
+        $seq = if ($assm.Length -ge 4) { $assm.Substring(0, 4) } else { $assm }
+        $tl = "$($main.TL)"
+        [PSCustomObject]@{
+            TL = $tl; Sequence = $seq; Assembly = $assm; Qty = $asmQty
+            Description = $desc; Remark = "$($main.Description)"; Length = Format-FeetInches16 $main.Length
+            WeightTotal = $wt
+        }
+    }
+    # One work order per transmittal + sequence (a folder per TL, a folder per sequence inside it). An assembly listed in a
+    # REV transmittal (Required Assm) moves off its original TL's work order and shows only on the REV.
+    $placed = foreach ($row in $rows) {
+        $own = [int]($row.TL -replace '\D', '0')
+        $tlNumber = if ($RevAssemblies -and $RevAssemblies.ContainsKey($row.Assembly)) { [int]$RevAssemblies[$row.Assembly] } else { $own }
+        $row | Add-Member -NotePropertyName TlNumber -NotePropertyValue $tlNumber -PassThru -Force
+    }
+    foreach ($g in ($placed | Group-Object -Property TlNumber, Sequence)) {
+        $first = $g.Group[0]
+        $items = @($g.Group | Group-Object -Property Assembly | ForEach-Object { $_.Group | Select-Object -Last 1 } | Sort-Object Assembly)
+        $note = if ($SeqNotes) { $SeqNotes[$first.Sequence] } else { $null }
+        [PSCustomObject]@{
+            Sequence = $first.Sequence
+            TL = if ($TlNames -and $TlNames.ContainsKey($first.TlNumber)) { $TlNames[$first.TlNumber] } else { "TL$($first.TlNumber)" }
+            TlNumber = $first.TlNumber
+            DueDate = if ($DueDates -and $DueDates.ContainsKey("$($first.TlNumber)|$($first.Sequence)")) { $DueDates["$($first.TlNumber)|$($first.Sequence)"] } else { "" }
+            Notes = if ($note -and $note.Coating) { $note.Coating } else { $DefaultNotes }
+            Items = $items
+        }
+    }
+}
+function Add-WorkOrderSheet {
+    param($Workbook, $Pages, [string]$OurJob, [string]$CustomerJob, [string]$ProjectManagers, [string]$IssuedDate, [string]$LogoBase64)
+
+    $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
+    $sheet.Name = "TERRA Work Order"
+    $sheet.Cells.NumberFormat = "@"
+    $sheet.Cells.Font.Name = "Arial"
+    $sheet.Cells.Font.Size = 9.5
+
+    # 17 columns cut at every x position used by the report's two header grids and the item grid (points, left margin = 0)
+    $edges = @(0, 28.8, 50.4, 100.8, 108, 118.4, 194.4, 201.6, 234, 280.8, 327.6, 345.6, 378, 381.6, 429.8, 453.6, 481.9, 554.4)
+    $edges = @(0, 28.8, 50.4, 100.8, 108, 118.4, 194.4, 201.6, 234, 280.8, 327.6, 345.6, 378, 381.6, 429.8, 453.6, 482, 554.4)
+    for ($c = 1; $c -le 17; $c++) {
+        $target = $edges[$c] - $edges[$c - 1]
+        $col = $sheet.Columns.Item($c)
+        $w = $target / 5.4
+        for ($k = 0; $k -lt 10; $k++) {
+            $col.ColumnWidth = $w
+            $cur = [double]$col.Width
+            if ([Math]::Abs($cur - $target) -lt 0.4) { break }
+            $w = $w * ($target / $cur)
+        }
+    }
+
+    $dark = 38 + 38 * 256 + 38 * 65536    # RGB(38,38,38)
+    $white = 16777215
+    # Alignment: xlCenter -4108, xlLeft -4131, xlRight -4152. Borders: xlThick 4, xlMedium -4138, xlContinuous 1, xlDash -4115.
+    $box = {
+        param($rng, $thickness)
+        foreach ($edge in 7, 8, 9, 10) { $bd = $rng.Borders.Item($edge); $bd.LineStyle = 1; $bd.Weight = $thickness; $bd.Color = 0 }
+    }
+    $labelCell = {
+        param($r, $c1, $c2, $text)
+        $rng = $sheet.Range($sheet.Cells.Item($r, $c1), $sheet.Cells.Item($r, $c2))
+        $rng.Merge()
+        $rng.Value2 = $text
+        $rng.Interior.Color = $dark
+        $rng.Font.Color = $white
+        $rng.Font.Underline = 2
+        $rng.HorizontalAlignment = -4108
+        $rng.VerticalAlignment = -4108
+        & $box $rng 4
+    }
+    $valueCell = {
+        param($r, $c1, $c2, $text)
+        $rng = $sheet.Range($sheet.Cells.Item($r, $c1), $sheet.Cells.Item($r, $c2))
+        $rng.Merge()
+        $rng.Value2 = $text
+        $rng.HorizontalAlignment = -4108
+        $rng.VerticalAlignment = -4108
+        $rng.WrapText = $true
+        & $box $rng 4
+    }
+
+    $logoPath = $null
+    if ($LogoBase64) {
+        $logoPath = Join-Path ([System.IO.Path]::GetTempPath()) "terra_wo_logo.jpg"
+        [System.IO.File]::WriteAllBytes($logoPath, [Convert]::FromBase64String($LogoBase64))
+    }
+
+    $createdText = "Report Created: $((Get-Date).ToString('MM/dd/yyyy h:mm tt', [System.Globalization.CultureInfo]::InvariantCulture))"
+    $firstCap = 16    # items that fit under the full header; continuation pages (table header only) fit 23
+    $contCap = 23
+    $grey = 242 + 242 * 256 + 242 * 65536
+    $row = 1
+    $pageStarts = @()
+
+    foreach ($wo in $Pages) {
+        # Split the work order's items into pages
+        $chunkList = [System.Collections.Generic.List[object]]::new()
+        $queue = @($wo.Items)
+        $cap = $firstCap
+        do {
+            $take = [Math]::Min($cap, $queue.Count)
+            $chunkList.Add(@($queue | Select-Object -First $take))
+            $queue = @($queue | Select-Object -Skip $take)
+            $cap = $contCap
+        } while ($queue.Count -gt 0)
+        $chunks = $chunkList.Count
+        $itemNo = 0
+        $sumRanges = @()
+
+        for ($pg = 1; $pg -le $chunks; $pg++) {
+            $start = $row
+            $pageStarts += $start
+            $pageItems = @($chunkList[$pg - 1])
+            $isFirst = ($pg -eq 1)
+            $isLast = ($pg -eq $chunks)
+
+            # Row heights follow the report: 79.2 address, 14.4 / 28.8 header grids, 21.6 gap, then 14.4 table header, 7.2 gap
+            $h = if ($isFirst) { @(79.2, 14.4, 28.8, 14.4, 28.8, 21.6, 14.4, 7.2) } else { @(14.4, 7.2) }
+            for ($i = 0; $i -lt $h.Count; $i++) { $sheet.Rows.Item($start + $i).RowHeight = $h[$i] }
+
+            if ($isFirst) {
+                $addr = $sheet.Range($sheet.Cells.Item($start, 1), $sheet.Cells.Item($start, 10))
+                $addr.Merge()
+                $addr.Value2 = "ADVANTAGE TERRAFAB`n400 S. 45TH STREET EAST`nMUSKOGEE, OK 74403`nPHONE: (918) 681-4496"
+                $addr.Font.Bold = $true
+                $addr.Font.Size = 11.5
+                $addr.WrapText = $true
+                $addr.HorizontalAlignment = -4131
+                $addr.VerticalAlignment = -4108
+                $addr.IndentLevel = 1
+                if ($logoPath) {
+                    $top = $sheet.Cells.Item($start, 1).Top
+                    [void]$sheet.Shapes.AddPicture($logoPath, 0, -1, 338.4, $top, 217.44, 72)
+                }
+
+                $r1 = $start + 1; $r2 = $start + 2; $r3 = $start + 3; $r4 = $start + 4
+                & $labelCell $r1 1 4 "PM"
+                & $labelCell $r1 5 7 "ATF JOB / WO #"
+                & $labelCell $r1 8 11 "ISSUED TO SHOP DATE"
+                & $labelCell $r1 12 15 "DATE DUE"
+                & $labelCell $r1 16 17 "CWI REQ'D"
+                & $valueCell $r2 1 4 $ProjectManagers
+                & $valueCell $r2 5 7 ((@($OurJob, $wo.Sequence) | Where-Object { $_ }) -join " / ")
+                & $valueCell $r2 8 11 $IssuedDate
+                & $valueCell $r2 12 15 $(if ($wo.DueDate) { $wo.DueDate } else { "3 WKS AFTER`nMATERIAL ARRIVES" })
+                & $valueCell $r2 16 17 "N/A"
+                & $labelCell $r3 1 3 "DWGS APPROVED"
+                & $labelCell $r3 4 6 "CUSTOMER JOB#"
+                & $labelCell $r3 7 9 "SEQUENCE"
+                & $labelCell $r3 10 13 "NOTES / REMARKS"
+                & $labelCell $r3 14 16 "DATE COMPLETED"
+                & $labelCell $r3 17 17 "QC DATE"
+                & $valueCell $r4 1 3 ""
+                & $valueCell $r4 4 6 $CustomerJob
+                & $valueCell $r4 7 9 $wo.Sequence
+                & $valueCell $r4 10 13 $wo.TL
+                & $valueCell $r4 14 16 ""
+                & $valueCell $r4 17 17 ""
+            }
+
+            # Item table header
+            $hr = $start + $h.Count - 2
+            & $labelCell $hr 1 1 "ITEM"
+            & $labelCell $hr 2 2 "Qty"
+            & $labelCell $hr 3 5 "PART #"
+            & $labelCell $hr 6 8 "DESCRIPTION"
+            & $labelCell $hr 9 10 "REMARK"
+            & $labelCell $hr 11 12 "LENGTH"
+            & $labelCell $hr 13 14 "W# EA."
+            & $labelCell $hr 15 16 "TOTAL W#"
+            & $labelCell $hr 17 17 "NOTES"
+
+            # Items: even rows bold on light grey, odd rows plain
+            $first = $start + $h.Count
+            $n = 0
+            foreach ($it in $pageItems) {
+                $r = $first + $n
+                $itemNo++
+                $sheet.Rows.Item($r).RowHeight = 28.8
+                $spans = @(@(1, 1), @(2, 2), @(3, 5), @(6, 8), @(9, 10), @(11, 12), @(13, 14), @(15, 16), @(17, 17))
+                foreach ($sp in $spans) {
+                    $rng = $sheet.Range($sheet.Cells.Item($r, $sp[0]), $sheet.Cells.Item($r, $sp[1]))
+                    $rng.Merge()
+                    $rng.HorizontalAlignment = -4108
+                    $rng.VerticalAlignment = -4108
+                }
+                $sheet.Cells.Item($r, 1).NumberFormat = "0"; $sheet.Cells.Item($r, 1).Value2 = $itemNo
+                $sheet.Cells.Item($r, 2).NumberFormat = "0"; $sheet.Cells.Item($r, 2).Value2 = [int]$it.Qty
+                $sheet.Cells.Item($r, 3).Value2 = $it.Assembly
+                $sheet.Cells.Item($r, 6).Value2 = $it.Description
+                $sheet.Cells.Item($r, 9).Value2 = $it.Remark
+                $sheet.Cells.Item($r, 11).Value2 = $it.Length
+                $sheet.Cells.Item($r, 15).NumberFormat = "#,##0"; $sheet.Cells.Item($r, 15).Value2 = [double]$it.WeightTotal
+                $sheet.Cells.Item($r, 13).NumberFormat = "#,##0"; $sheet.Cells.Item($r, 13).Formula = "=O$r/B$r"
+                $sheet.Cells.Item($r, 17).Value2 = $wo.Notes
+                $sheet.Cells.Item($r, 17).WrapText = $true
+                if ($itemNo % 2 -eq 0) {
+                    $line = $sheet.Range($sheet.Cells.Item($r, 1), $sheet.Cells.Item($r, 17))
+                    $line.Interior.Color = $grey
+                    $line.Font.Bold = $true
+                }
+                # dotted divider between W# EA. and TOTAL W#
+                $bd = $sheet.Cells.Item($r, 15).Borders.Item(7)
+                $bd.LineStyle = -4118; $bd.Weight = 2; $bd.Color = 0
+                $n++
+            }
+            if ($pageItems.Count -gt 0) { $sumRanges += "O$($first):O$($first + $pageItems.Count - 1)" }
+
+            # Total row (after the last item of the work order), then the closing rule
+            $tr = $first + $pageItems.Count
+            $sheet.Rows.Item($tr).RowHeight = 21.6
+            if ($isLast) {
+                $tl = $sheet.Range($sheet.Cells.Item($tr, 11), $sheet.Cells.Item($tr, 12))
+                $tl.Merge(); $tl.Value2 = "Total:"; $tl.Font.Bold = $true
+                $tl.HorizontalAlignment = -4152; $tl.VerticalAlignment = -4107
+                $tv = $sheet.Range($sheet.Cells.Item($tr, 15), $sheet.Cells.Item($tr, 16))
+                $tv.Merge(); $tv.NumberFormat = "#,##0"
+                $tv.HorizontalAlignment = -4108; $tv.VerticalAlignment = -4107
+                $sheet.Cells.Item($tr, 15).Formula = "=SUM($($sumRanges -join ','))"
+            }
+            if ($isLast) {
+                $rule = $sheet.Range($sheet.Cells.Item($tr, 1), $sheet.Cells.Item($tr, 17)).Borders.Item(9)
+                $rule.LineStyle = 1; $rule.Weight = -4138; $rule.Color = 0
+            }
+
+            # Filler so the footer lands at the bottom of the page, then the footer (rule above and below)
+            $used = ($h | Measure-Object -Sum).Sum + 28.8 * $pageItems.Count + 21.6
+            $ft = $tr + 1
+            $remaining = [double](714.2 - $used)
+            while ($remaining -gt 0.5) {               # Excel caps a row at 409.5 pt
+                $sheet.Rows.Item($ft).RowHeight = [Math]::Min(400.0, $remaining)
+                $remaining -= 400.0
+                $ft++
+            }
+            $sheet.Rows.Item($ft).RowHeight = 14.4
+            $fl = $sheet.Range($sheet.Cells.Item($ft, 1), $sheet.Cells.Item($ft, 8))
+            $fl.Merge(); $fl.Value2 = "Page $pg of $chunks"
+            $fr2 = $sheet.Range($sheet.Cells.Item($ft, 9), $sheet.Cells.Item($ft, 17))
+            $fr2.Merge(); $fr2.Value2 = $createdText
+            $foot = $sheet.Range($sheet.Cells.Item($ft, 1), $sheet.Cells.Item($ft, 17))
+            $foot.Font.Name = "Microsoft Sans Serif"; $foot.Font.Size = 7
+            $fl.HorizontalAlignment = -4131; $fr2.HorizontalAlignment = -4152
+            $foot.VerticalAlignment = -4108
+            foreach ($seg in $fl, $fr2) {
+                foreach ($edge in 8, 9) { $bd = $seg.Borders.Item($edge); $bd.LineStyle = 1; $bd.Weight = -4138; $bd.Color = 0 }
+            }
+
+            $row = $ft + 1
+        }
+    }
+
+    try {
+        $ps = $sheet.PageSetup
+        $ps.PrintArea = "`$A`$1:`$Q`$$($row - 1)"
+        $ps.Orientation = 1
+        $ps.PaperSize = 1                         # Letter
+        $ps.LeftMargin = 28.08; $ps.RightMargin = 28.08
+        $ps.TopMargin = 28.08; $ps.BottomMargin = 28.08
+        $ps.HeaderMargin = 0; $ps.FooterMargin = 0
+        $ps.CenterHorizontally = $true
+        $sheet.ResetAllPageBreaks()
+        foreach ($ps0 in ($pageStarts | Select-Object -Skip 1)) { [void]$sheet.HPageBreaks.Add($sheet.Cells.Item($ps0, 1)) }
+        $ps.Zoom = $false
+        $ps.FitToPagesWide = 1
+        $ps.FitToPagesTall = $false
+    }
+    catch {
+        Write-Log "TERRA Work Order tab built, but page setup failed (is a printer installed?): $($_.Exception.Message)" "Yellow"
+    }
+    return $sheet
+}
+
+$script:TerraLogoBase64 = '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'
 
 function Read-KssSelectionInteractive ($Entries) {
     $cursor = 0
@@ -1990,12 +2361,12 @@ $ourJobNumber = ""
 $issuedBy = ""
 if ($modeChoice -ne "2") {
     $requiredAssmPath = Select-RequiredAssmFile
+    $guessJob = ""
+    if ($requiredAssmPath -and [System.IO.Path]::GetFileName($requiredAssmPath) -match '^\s*(\d{4,6})') { $guessJob = $Matches[1] }
+    $jobPrompt = if ($guessJob) { "Our job number (default: $guessJob)" } else { "Our job number (shown on the labels and work orders)" }
+    $ourJobInput = (Read-Host $jobPrompt).Trim()
+    $ourJobNumber = if ($ourJobInput) { $ourJobInput } else { $guessJob }
     if ($requiredAssmPath) {
-        $guessJob = ""
-        if ([System.IO.Path]::GetFileName($requiredAssmPath) -match '^\s*(\d{4,6})') { $guessJob = $Matches[1] }
-        $jobPrompt = if ($guessJob) { "Our job number (default: $guessJob)" } else { "Our job number (shown first on the label)" }
-        $ourJobInput = (Read-Host $jobPrompt).Trim()
-        $ourJobNumber = if ($ourJobInput) { $ourJobInput } else { $guessJob }
         $issuedBy = (Read-Host "Initials of who is making the folders (Enter to leave blank)").Trim().ToUpper()
     }
 }
@@ -3483,6 +3854,43 @@ if ($requiredAssmPath) {
     }
     catch {
         Write-Log "Could not build the Folder Labels tab: $($_.Exception.Message)" "Red"
+    }
+}
+
+# --- TAB: TERRA WORK ORDER (KSS mode: one work order per sequence) ---
+if ($modeChoice -ne "2") {
+    Write-Log "Building TERRA Work Order tab..."
+    try {
+        $workOrderManagers = "Tyler / Matt / Rob"
+        $workOrderIssued = (Get-Date).ToString('M/d/yy', [System.Globalization.CultureInfo]::InvariantCulture)
+        # NOTES column: paint info per sequence from the Required Assm workbook (TL Notes tab), else "NO PAINT"
+        $workOrderNotes = @{}
+        if ($allWorkbookTLs) {
+            foreach ($tlEntry in $allWorkbookTLs) {
+                foreach ($seq in $tlEntry.Sequences) {
+                    $note = $tlEntry.SeqNotes[$seq]
+                    $coat = if ($note -and $note.Coating) { $note.Coating } else { $tlEntry.Coating }
+                    if ($coat -and -not $workOrderNotes.ContainsKey($seq)) { $workOrderNotes[$seq] = @{ Coating = $coat } }
+                }
+            }
+        }
+        $revAssemblies = @{}; $tlNames = @{}; $workOrderDue = @{}
+        foreach ($tlEntry in @($allWorkbookTLs | Sort-Object Number)) {
+            if (-not $tlEntry) { continue }
+            $tlNames[[int]$tlEntry.Number] = $tlEntry.TL
+            foreach ($seq in $tlEntry.Sequences) {   # same due date as the folder label stickers
+                $note = $tlEntry.SeqNotes[$seq]
+                $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tlEntry.DueDate }
+                if ($due) { $workOrderDue["$([int]$tlEntry.Number)|$seq"] = $due }
+            }
+            if ($tlEntry.IsRev) { foreach ($set in $tlEntry.SeqAssemblies.Values) { foreach ($asm in $set) { $revAssemblies[$asm] = [int]$tlEntry.Number } } }
+        }
+        $workOrderPages = @(Get-WorkOrderPages -MasterData $masterData -SeqNotes $workOrderNotes -RevAssemblies $revAssemblies -TlNames $tlNames -DueDates $workOrderDue | Sort-Object TlNumber, Sequence)
+        [void](Add-WorkOrderSheet -Workbook $workbook -Pages $workOrderPages -OurJob $ourJobNumber -CustomerJob $jobNumber -ProjectManagers $workOrderManagers -IssuedDate $workOrderIssued -LogoBase64 $script:TerraLogoBase64)
+        Write-Log "TERRA Work Order tab ready: $($workOrderPages.Count) work order(s), one per TL and sequence." "Green"
+    }
+    catch {
+        Write-Log "Could not build the TERRA Work Order tab: $($_.Exception.Message)" "Red"
     }
 }
 

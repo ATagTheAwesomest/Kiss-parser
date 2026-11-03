@@ -129,19 +129,18 @@ Needs a `*REQUIRED ASSM*.xlsx` in the run folder (git-ignored like every other j
 | `Paint / TL Details` (above the header) | Coating text, shown at the right of line 2. Left blank = no coating. |
 | `Due Date` (above the header) | Due date, shown after the job title on line 2. Blank = left out. |
 | `TL Name` (header) | Transmittal, e.g. `TL1296`. A REV is `TLR1301` and keeps the `R` on the label. Columns that are not named `TL#### / TLR####`, or that hold no assembly numbers, are ignored. |
-| Rows under the header | AFCO assembly numbers. The first 4 digits are the sequence (an `R` prefix is ignored). Unique sequences, ascending, become line 3. |
+| Rows under the header | AFCO assembly numbers. The first 4 digits are the sequence (an `R` prefix is ignored). Each unique sequence in a column gets its own label (line 1). |
 
 The `Explanation` row is not used. The other tabs in that workbook are formulas over Sheet1 and are not read.
 
-**One label per transmittal**, sorted by TL number. If KSS files were selected for the run, only transmittals matching a selected file's TL number get a label (`TL1301.kss` matches `TLR1301`); skipped ones are reported in yellow.
+**One label per TL and sequence** (one per folder), sorted by TL number, then sequence. If KSS files were selected for the run, only transmittals matching a selected file's TL number get a label (`TL1301.kss` matches `TLR1301`); skipped ones are reported in yellow.
 
 | Line | Content |
 |---|---|
-| 1 (big) | `<our job> - <AFCO job> - <TL>`, e.g. `26102 - 25351 - TL1296`. On a REV (`TLR1301`) only the `R` is italic. Our job is typed at the prompt (default: leading digits of the Required Assm file name). AFCO job is the KSS header job number with dashes removed (`25-351` becomes `25351`). |
+| 1 (big) | `<our job> - <TL> - <sequence>`, e.g. `26102 - TL1296 - 5131`. On a REV (`TLR1301`) only the `R` is italic. Our job is typed at the prompt (default: leading digits of the Required Assm file name). The AFCO job number is not on the label. |
 | 2 (small) | Left: `<project name> - <due date>`. Right: coating. |
-| 3 (big) | Sequences, e.g. `5131 - 5132`. |
 
-**Print setup (tab `Folder Labels`):** each label is a 3.5 in x 1.125 in block (252 x 81 pt) of three rows, with a manual page break between labels, margins 0, landscape, centered, print area covering the labels only, printed at 90% so the text clears the printer's hard margins. Select the Dymo as the printer with the 3.5 x 1.125 in address label size (e.g. 30252), then print the tab. Text shrinks to fit. If a label clips or spills onto an extra page, lower the zoom in Page Setup (or change `$LabelZoom` in `Add-FolderLabelSheet`). Excel cannot create a custom paper size by itself, so the paper size comes from the Dymo driver.
+**Print setup (tab `Folder Labels`):** each label is a 3.5 in x 1.125 in block (252 x 81 pt) of two rows (55.5 + 25.5 pt), with a manual page break between labels, margins 0, landscape, centered, print area covering the labels only, printed at 90% so the text clears the printer's hard margins. Select the Dymo as the printer with the 3.5 x 1.125 in address label size (e.g. 30252), then print the tab. Text shrinks to fit. If a label clips or spills onto an extra page, lower the zoom in Page Setup (or change `$LabelZoom` in `Add-FolderLabelSheet`). Excel cannot create a custom paper size by itself, so the paper size comes from the Dymo driver.
 
 Assumptions: the due date text is used as typed in the sheet (real dates are shown as `M/d/yy`); coating comes only from the `Paint / TL Details` row, not from the KSS Finish field.
 

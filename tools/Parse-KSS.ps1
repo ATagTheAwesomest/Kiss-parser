@@ -357,7 +357,7 @@ function ConvertTo-TransmittalTag ($text) {
 # --- FOLDER LABELS (from the "Required Assm" workbook) ---
 # Looks for a "... REQUIRED ASSM.xlsx" in the current folder. Its Sheet1 has one column per transmittal:
 # TL name in the "TL Name" row, the AFCO assembly numbers underneath, and optional "Paint / TL Details" and
-# "Due Date" rows above. A REV transmittal is named TLR####. Each transmittal becomes one 3.5" x 1.125" label.
+# "Due Date" rows above. A REV transmittal is named TLR####. Each transmittal + sequence (folder) becomes one 3.5" x 1.125" label.
 function Select-RequiredAssmFile {
     $files = @(Get-ChildItem -LiteralPath (Get-Location).Path -Filter *.xlsx -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -notlike '~$*' -and $_.Name -match '(?i)required[\s_-]*assm' } |
@@ -371,7 +371,7 @@ function Select-RequiredAssmFile {
     if ($files.Count -eq 1) {
         Write-Host "Files: $($files[0].Name)"
         Write-Host ""
-        Write-Host "  [Y]es (default): add a 'Folder Labels' tab to the BOM, one 3.5x1.125 label per transmittal"
+        Write-Host "  [Y]es (default): add a 'Folder Labels' tab to the BOM, one 3.5x1.125 label per transmittal and sequence"
         Write-Host "  [N]o: skip the labels"
         $choice = Read-Host "Build folder labels from this file? [Y]es / [N]o (default: Yes)"
         if ($choice -match '^(n|no)$') { return $null }
@@ -461,10 +461,10 @@ function Read-RequiredAssm {
     return @($result | Sort-Object Number)
 }
 
-# Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 34.5 + 18 + 28.5 = 81 pt.
+# Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 55.5 + 25.5 = 81 pt.
 # Printing is at 90% so the text stays inside the printer's hard margins; change $LabelZoom if the label clips.
 function Add-FolderLabelSheet {
-    param($Workbook, $Labels, [string]$OurJob, [string]$AfcoJob, [string]$Title, [int]$LabelZoom = 90)
+    param($Workbook, $Labels, [string]$OurJob, [string]$Title, [int]$LabelZoom = 90)
 
     $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
     $sheet.Name = "Folder Labels"
@@ -488,21 +488,20 @@ function Add-FolderLabelSheet {
     # Alignment constants: xlLeft = -4131, xlRight = -4152, xlCenter = -4108
     $i = 0
     foreach ($label in $Labels) {
-        $r1 = 3 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2
+        $r1 = 2 * $i + 1; $r2 = $r1 + 1
 
-        $sheet.Rows.Item($r1).RowHeight = 34.5
-        $sheet.Rows.Item($r2).RowHeight = 18
-        $sheet.Rows.Item($r3).RowHeight = 28.5
+        $sheet.Rows.Item($r1).RowHeight = 55.5
+        $sheet.Rows.Item($r2).RowHeight = 25.5
 
-        # Line 1: our job - AFCO job - transmittal (big)
-        $jobParts = @($OurJob, $AfcoJob, $label.TL) | Where-Object { $_ }
+        # Line 1: our job - transmittal - sequence (big)
+        $jobParts = @($OurJob, $label.TL, $label.Sequence) | Where-Object { $_ }
         $cell1 = $sheet.Range($sheet.Cells.Item($r1, 1), $sheet.Cells.Item($r1, 2))
         $cell1.Merge()
         $line1 = ($jobParts -join " - ")
         $cell1.Value2 = $line1
-        $cell1.Font.Size = 22
+        $cell1.Font.Size = 30
         if ($label.IsRev) {                      # REV transmittal: the R in TLR#### is italic
-            $rPos = $line1.LastIndexOf($label.TL) + 3
+            $rPos = $line1.IndexOf($label.TL) + 3
             $cell1.Characters($rPos, 1).Font.Italic = $true
         }
         $cell1.HorizontalAlignment = -4108
@@ -513,29 +512,21 @@ function Add-FolderLabelSheet {
         $leftParts = @($Title, $label.DueDate) | Where-Object { $_ }
         $cellL = $sheet.Cells.Item($r2, 1)
         $cellL.Value2 = ($leftParts -join " - ")
-        $cellL.Font.Size = 10
+        $cellL.Font.Size = 12
         $cellL.HorizontalAlignment = -4131
         $cellL.VerticalAlignment = -4108
         $cellL.ShrinkToFit = $true
         $cellR = $sheet.Cells.Item($r2, 2)
         $cellR.Value2 = $label.Coating
-        $cellR.Font.Size = 10
+        $cellR.Font.Size = 12
         $cellR.HorizontalAlignment = -4152
         $cellR.VerticalAlignment = -4108
         $cellR.ShrinkToFit = $true
 
-        # Line 3: sequences (big)
-        $cell3 = $sheet.Range($sheet.Cells.Item($r3, 1), $sheet.Cells.Item($r3, 2))
-        $cell3.Merge()
-        $cell3.Value2 = ($label.Sequences -join " - ")
-        $cell3.Font.Size = 22
-        $cell3.HorizontalAlignment = -4108
-        $cell3.VerticalAlignment = -4108
-        $cell3.ShrinkToFit = $true
         $i++
     }
 
-    $lastRow = 3 * $Labels.Count
+    $lastRow = 2 * $Labels.Count
     $sheet.Range("D1").Value2 = "Print this tab on the Dymo (3.5 x 1.125 in address label). One label per page."
     $sheet.Range("D1").Font.Bold = $false
     $sheet.Range("D1").Font.Italic = $true
@@ -551,7 +542,7 @@ function Add-FolderLabelSheet {
         $ps.CenterVertically = $true
         $sheet.ResetAllPageBreaks()
         for ($b = 1; $b -lt $Labels.Count; $b++) {
-            [void]$sheet.HPageBreaks.Add($sheet.Cells.Item(3 * $b + 1, 1))
+            [void]$sheet.HPageBreaks.Add($sheet.Cells.Item(2 * $b + 1, 1))
         }
         $ps.Zoom = $LabelZoom                    # after the page breaks: ResetAllPageBreaks resets the zoom to 100
     }
@@ -3289,11 +3280,17 @@ if ($requiredAssmPath) {
             Write-Log "No transmittals with assemblies found in the Required Assm workbook; skipping the Folder Labels tab." "Yellow"
         }
         else {
-            $afcoJob = $jobNumber -replace '[^0-9A-Za-z]', ''
-            [void](Add-FolderLabelSheet -Workbook $workbook -Labels $labelData -OurJob $ourJobNumber -AfcoJob $afcoJob -Title $projectName.ToUpper())
+            # One label per folder = one per (TL, sequence), ordered by TL number then sequence
+            $labelData = @($labelData | Sort-Object Number | ForEach-Object {
+                $tl = $_
+                foreach ($seq in $tl.Sequences) {
+                    [PSCustomObject]@{ TL = $tl.TL; IsRev = $tl.IsRev; Sequence = $seq; DueDate = $tl.DueDate; Coating = $tl.Coating }
+                }
+            })
+            [void](Add-FolderLabelSheet -Workbook $workbook -Labels $labelData -OurJob $ourJobNumber -Title $projectName.ToUpper())
             foreach ($l in $labelData) {
-                $line1 = (@($ourJobNumber, $afcoJob, $l.TL) | Where-Object { $_ }) -join " - "
-                Write-Log "  Label: $line1 | $($l.DueDate) | $($l.Coating) | $($l.Sequences -join ' - ')" "Cyan"
+                $line1 = (@($ourJobNumber, $l.TL, $l.Sequence) | Where-Object { $_ }) -join " - "
+                Write-Log "  Label: $line1 | $($l.DueDate) | $($l.Coating)" "Cyan"
             }
             Write-Log "Folder Labels tab ready: $($labelData.Count) label(s). Print that tab on the Dymo (3.5 x 1.125 in)." "Green"
         }

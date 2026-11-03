@@ -15,7 +15,7 @@ software) into the shop's working documents.
 
 | File | What it does |
 | --- | --- |
-| `tools/Parse-KSS.ps1` | The KISS engine. Reads the `.kss` files (or a soundwall post-schedule CSV) in the current folder and writes the BOM workbook, filtered `.kss` files, an optional QPR workbook, a `Folder Labels` tab (Dymo 3.5 x 1.125 in, one label per transmittal) when a Required Assm workbook is present, and per-TL shop scripts: `Sort-PlatesByThickness` (sorts plate DXFs into thickness folders), `Type-Quantities` and `Type-Grades` (type values into ProNest). |
+| `tools/Parse-KSS.ps1` | The KISS engine. Reads the `.kss` files (or a soundwall post-schedule CSV) in the current folder and writes the BOM workbook, filtered `.kss` files, an optional QPR workbook, a `Folder Labels` tab (Dymo 3.5 x 1.125 in, one label per transmittal and sequence) when a Required Assm workbook is present, and per-TL shop scripts: `Sort-PlatesByThickness` (sorts plate DXFs into thickness folders), `Type-Quantities` and `Type-Grades` (type values into ProNest). |
 | `tools/verify-whitelist.ps1` | Tests an assembly whitelist on its own, using the same parser as the engine. |
 
 ## Needs

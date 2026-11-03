@@ -514,7 +514,7 @@ function Read-RequiredAssm {
 function Add-FolderLabelSheet {
     param($Workbook, $Labels, [string]$OurJob, [string]$Title, [string]$CustomerJob, [string]$IssuedBy)
 
-    $IssuedLabel = "ISSUED:"   # text printed before the initials on line 2 (alone if the initials are blank)
+    $IssuedLabel = "IS:"   # text printed before the initials on line 2 (alone if the initials are blank)
 
     $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
     $sheet.Name = "Folder Labels"

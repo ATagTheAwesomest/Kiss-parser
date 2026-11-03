@@ -422,6 +422,7 @@ function Read-RequiredAssm {
                 if ($name -notmatch '^TLR?\d+$') { continue }
 
                 $seqs = [System.Collections.Generic.SortedSet[string]]::new()
+                $seqAssm = @{}                                    # sequence -> assembly numbers (digits only) in this column
                 $count = 0
                 for ($r = $hdr + 1; $r -le $nRows; $r++) {
                     $v = $vals[$r, $c]
@@ -430,6 +431,8 @@ function Read-RequiredAssm {
                     if ($digits.Length -lt 4) { continue }
                     $count++
                     [void]$seqs.Add($digits.Substring(0, 4))
+                    if (-not $seqAssm.ContainsKey($digits.Substring(0, 4))) { $seqAssm[$digits.Substring(0, 4)] = [System.Collections.Generic.HashSet[string]]::new() }
+                    [void]$seqAssm[$digits.Substring(0, 4)].Add($digits)
                 }
                 if ($count -eq 0) { continue }                    # unused column
 
@@ -449,6 +452,7 @@ function Read-RequiredAssm {
                     Coating   = $coating
                     DueDate   = $due
                     Sequences = @($seqs)
+                    SeqAssemblies = $seqAssm
                     Count     = $count
                 })
             }
@@ -510,7 +514,7 @@ function Read-RequiredAssm {
 function Add-FolderLabelSheet {
     param($Workbook, $Labels, [string]$OurJob, [string]$Title, [string]$CustomerJob, [string]$IssuedBy)
 
-    $IssuedLabel = "ISSUED:"   # word printed before the initials on line 2
+    $IssuedLabel = "IS:"   # text printed before the initials on line 2 (alone if the initials are blank)
 
     $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
     $sheet.Name = "Folder Labels"
@@ -563,7 +567,7 @@ function Add-FolderLabelSheet {
         $cellL.VerticalAlignment = -4108
         $cellL.ShrinkToFit = $true
         $cellR = $sheet.Cells.Item($r2, 2)
-        $cellR.Value2 = "$IssuedLabel $IssuedBy"
+        $cellR.Value2 = (@($IssuedLabel, $IssuedBy) | Where-Object { $_ }) -join " "
         $cellR.Font.Size = 10
         $cellR.HorizontalAlignment = -4152
         $cellR.VerticalAlignment = -4108
@@ -1887,8 +1891,7 @@ if ($modeChoice -ne "2") {
         $jobPrompt = if ($guessJob) { "Our job number (default: $guessJob)" } else { "Our job number (shown first on the label)" }
         $ourJobInput = (Read-Host $jobPrompt).Trim()
         $ourJobNumber = if ($ourJobInput) { $ourJobInput } else { $guessJob }
-        $issuedBy = (Read-Host "Initials of who is making the folders (default: AP)").Trim().ToUpper()
-        if (-not $issuedBy) { $issuedBy = "AP" }
+        $issuedBy = (Read-Host "Initials of who is making the folders (Enter to leave blank)").Trim().ToUpper()
     }
 }
 
@@ -3333,6 +3336,7 @@ if ($requiredAssmPath) {
     Write-Log "Building Folder Labels tab from $([System.IO.Path]::GetFileName($requiredAssmPath))..."
     try {
         $labelData = @(Read-RequiredAssm -Excel $excel -Path $requiredAssmPath)
+        $allWorkbookTLs = $labelData
         if ($allTLs.Count -gt 0) {
             $runNumbers = @($allTLs | ForEach-Object { [int]($_ -replace '\D', '0') })
             $skipped = @($labelData | Where-Object { $runNumbers -notcontains $_.Number } | ForEach-Object { $_.TL })
@@ -3352,7 +3356,18 @@ if ($requiredAssmPath) {
                     $note = $tl.SeqNotes[$seq]
                     $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tl.DueDate }
                     $coat = if ($note -and $note.Coating) { $note.Coating } else { $tl.Coating }
-                    [PSCustomObject]@{ TL = $tl.TL; IsRev = $tl.IsRev; Sequence = $seq; DueDate = $due; Notes = $coat }
+                    $notes = $coat
+                    if ($tl.IsRev) {
+                        # REV: name the transmittals that hold the same assembly numbers in this sequence (non-REV ones preferred)
+                        $mine = $tl.SeqAssemblies[$seq]
+                        $hits = @($allWorkbookTLs | Where-Object {
+                            $_.TL -ne $tl.TL -and $_.SeqAssemblies.ContainsKey($seq) -and $mine.Overlaps($_.SeqAssemblies[$seq])
+                        } | Sort-Object Number)
+                        $plain = @($hits | Where-Object { -not $_.IsRev })
+                        if ($plain.Count -gt 0) { $hits = $plain }
+                        if ($hits.Count -gt 0) { $notes = (@("REVISES $(($hits | ForEach-Object { $_.TL }) -join ', ')", $coat) | Where-Object { $_ }) -join " - " }
+                    }
+                    [PSCustomObject]@{ TL = $tl.TL; IsRev = $tl.IsRev; Sequence = $seq; DueDate = $due; Notes = $notes }
                 }
             })
             [void](Add-FolderLabelSheet -Workbook $workbook -Labels $labelData -OurJob $ourJobNumber -Title $projectName.ToUpper() -CustomerJob $jobNumber -IssuedBy $issuedBy)

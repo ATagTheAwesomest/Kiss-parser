@@ -512,9 +512,9 @@ function Read-RequiredAssm {
 # Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 40.5 + 15 + 24.75 + 0.75 (spacer so the bottom border prints) = 81 pt.
 # Margins are 0 and the page is set to fit all columns on one page, so the text stays inside the printable area.
 function Add-FolderLabelSheet {
-    param($Workbook, $Labels, [string]$OurJob, [string]$Title, [string]$CustomerJob, [string]$IssuedBy)
+    param($Workbook, $Labels)
 
-    $IssuedLabel = "IS:"   # text printed before the initials on line 2 (alone if the initials are blank)
+    # Job, title, customer job and initials come from the Settings tab (named cells Set_*)
 
     $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
     $sheet.Name = "Folder Labels"
@@ -546,16 +546,11 @@ function Add-FolderLabelSheet {
         $sheet.Rows.Item($r4).RowHeight = 0.75      # spacer: the page ends below the last border, so the bottom line is not clipped
 
         # Line 1: our job - transmittal - sequence (big)
-        $jobParts = @($OurJob, $label.TL, $label.Sequence) | Where-Object { $_ }
         $cell1 = $sheet.Range($sheet.Cells.Item($r1, 1), $sheet.Cells.Item($r1, 2))
         $cell1.Merge()
-        $line1 = ($jobParts -join " - ")
-        $cell1.Value2 = $line1
+        Set-CellFormulaText $cell1 "=TEXTJOIN("" - "",TRUE,Set_OurJob,""$($label.TL)"",""$($label.Sequence)"")"
         $cell1.Font.Size = 26
-        if ($label.IsRev) {                      # REV transmittal: the R in TLR#### is italic
-            $rPos = $line1.IndexOf($label.TL) + 3
-            $cell1.Characters($rPos, 1).Font.Italic = $true
-        }
+        if ($label.IsRev) { $cell1.Font.Italic = $true }   # a formula cell cannot italicize just the R of TLR####, so a REV label is italic throughout
         $cell1.HorizontalAlignment = -4108
         $cell1.VerticalAlignment = -4108
         $cell1.ShrinkToFit = $true
@@ -563,14 +558,14 @@ function Add-FolderLabelSheet {
 
         # Line 2 (small): project title - customer job on the left, "ISU'D: initials" on the right
         $cellL = $sheet.Cells.Item($r2, 1)
-        $cellL.Value2 = (@($Title, $CustomerJob) | Where-Object { $_ }) -join " - "
+        Set-CellFormulaText $cellL "=TEXTJOIN("" - "",TRUE,Set_Title,Set_CustomerJob)"
         $cellL.Font.Size = 10
         $cellL.HorizontalAlignment = -4131
         $cellL.VerticalAlignment = -4108
         $cellL.ShrinkToFit = $true
         Set-LabelCellBorder $cellL
         $cellR = $sheet.Cells.Item($r2, 2)
-        $cellR.Value2 = (@($IssuedLabel, $IssuedBy) | Where-Object { $_ }) -join " "
+        Set-CellFormulaText $cellR "=TRIM(Set_IssuedLabel&"" ""&Set_Initials)"
         $cellR.Font.Size = 10
         $cellR.HorizontalAlignment = -4152
         $cellR.VerticalAlignment = -4108
@@ -744,6 +739,73 @@ function Add-TlLabelSheet {
     return $sheet
 }
 
+# --- SETTINGS TAB: values the setup prompts used to bake into cells now live here as named cells (Set_*) that the labels, work orders and Statistics follow ---
+function Add-SettingsSheet {
+    param($Workbook, [string]$Title, [string]$CustomerJob, [string]$OurJob, [string]$Initials, [string]$ProjectManagers)
+
+    $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
+    $sheet.Name = "Settings"
+    $sheet.Cells.Font.Name = "Arial"
+    $sheet.Cells.Font.Size = 10
+
+    $sheet.Range("A1:C1").Merge()
+    $sheet.Cells.Item(1, 1).Value2 = "SETTINGS - change the yellow cells; labels, work orders and Statistics follow"
+    $sheet.Range("A1:C1").Font.Bold = $true
+    $sheet.Range("A1:C1").Font.Size = 13
+    $sheet.Range("A1:C1").Font.Color = Get-OleColor 255 255 255
+    $sheet.Range("A1:C1").Interior.Color = Get-OleColor 27 54 93
+    $sheet.Range("A1:C1").VerticalAlignment = -4108
+    $sheet.Rows.Item(1).RowHeight = 26
+
+    $sheet.Cells.Item(3, 1).Value2 = "Setting"
+    $sheet.Cells.Item(3, 2).Value2 = "Value"
+    $sheet.Cells.Item(3, 3).Value2 = "Used on"
+    $sheet.Range("A3:C3").Font.Bold = $true
+    $sheet.Range("A3:C3").Interior.Color = Get-OleColor 216 228 188
+
+    $issued = [double][DateTime]::Today.ToOADate()
+    # Name, label, value, number format ("@" = text), where it is used
+    $settings = @(
+        @("Set_Title", "Project title (label line 2)", $Title, "@", "Folder Labels, Statistics"),
+        @("Set_CustomerJob", "Customer job #", $CustomerJob, "@", "Folder Labels, TERRA Work Order, Statistics"),
+        @("Set_OurJob", "Our job #", $OurJob, "@", "Folder Labels (line 1), TERRA Work Order (ATF JOB / WO #)"),
+        @("Set_IssuedLabel", "Issued prefix", "IS:", "@", "Folder Labels (printed before the initials)"),
+        @("Set_Initials", "Initials (who made the folders)", $Initials, "@", "Folder Labels (line 2, right)"),
+        @("Set_ProjectManagers", "Project managers (PM box)", $ProjectManagers, "@", "TERRA Work Order"),
+        @("Set_IssuedDate", "Issued to shop date", $issued, "m/d/yy", "TERRA Work Order"),
+        @("Set_DefaultDue", "Due date text when a sequence has none", "3 WKS AFTER MATERIAL ARRIVES", "@", "TERRA Work Order"),
+        @("Set_DefaultNotes", "Default paint / notes (none listed for the sequence)", "NO PAINT", "@", "TERRA Work Order (NOTES column)"),
+        @("Set_CWI", "CWI required", "N/A", "@", "TERRA Work Order"),
+        @("Set_WarnDays", "Flag a due date as DUE SOON within (days)", 7, "0", "Statistics (schedule)")
+    )
+    $row = 4
+    foreach ($s in $settings) {
+        $sheet.Cells.Item($row, 1).Value2 = $s[1]
+        $valueCell = $sheet.Cells.Item($row, 2)
+        $valueCell.NumberFormat = $s[3]
+        $valueCell.Value2 = $s[2]
+        $valueCell.Interior.Color = Get-OleColor 255 242 204
+        $valueCell.HorizontalAlignment = -4131
+        $sheet.Cells.Item($row, 3).Value2 = $s[4]
+        $sheet.Cells.Item($row, 3).Font.Color = Get-OleColor 110 110 110
+        [void]$Workbook.Names.Add($s[0], "=Settings!`$B`$$row")
+        $row++
+    }
+    $sheet.Range("A3:C$($row - 1)").Borders.LineStyle = 1
+    $sheet.Range("A3:C$($row - 1)").Borders.Color = Get-OleColor 200 200 200
+    $sheet.Columns.Item(1).ColumnWidth = 48
+    $sheet.Columns.Item(2).ColumnWidth = 34
+    $sheet.Columns.Item(3).ColumnWidth = 58
+    $sheet.Cells.Item($row + 1, 1).Value2 = "Setup still asks for these once and fills them in here as the starting values."
+    $sheet.Cells.Item($row + 1, 1).Font.Italic = $true
+    return $sheet
+}
+
+# Writes a formula into a cell/merged range on a sheet whose cells are formatted as text (a "@" cell would show the formula as text)
+function Set-CellFormulaText ($Range, [string]$Formula, [string]$NumberFormat = "General") {
+    $Range.NumberFormat = $NumberFormat
+    $Range.Cells.Item(1, 1).Formula = $Formula
+}
 # --- TERRA WORK ORDER (one letter page per transmittal + sequence, laid out like the Tekla UDR_TERRA_Work_Order report) ---
 # Assembly weight comes from the KSS parts (Tekla exports carry no weights): rolled shapes by lb/ft x length, plates and bars by volume.
 function Get-KssPartWeight ($shape, $size, $lengthStr, $qty) {
@@ -848,7 +910,7 @@ function Get-WorkOrderPages {
     }
 }
 function Add-WorkOrderSheet {
-    param($Workbook, $Pages, [string]$OurJob, [string]$CustomerJob, [string]$ProjectManagers, [string]$IssuedDate, [string]$LogoBase64)
+    param($Workbook, $Pages, [string]$LogoBase64)   # job, customer job, PMs, issued date and CWI come from the Settings tab (Set_*)
 
     $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
     $sheet.Name = "TERRA Work Order"
@@ -891,10 +953,10 @@ function Add-WorkOrderSheet {
         & $box $rng 4
     }
     $valueCell = {
-        param($r, $c1, $c2, $text)
+        param($r, $c1, $c2, $text, $fmt = "General")
         $rng = $sheet.Range($sheet.Cells.Item($r, $c1), $sheet.Cells.Item($r, $c2))
         $rng.Merge()
-        $rng.Value2 = $text
+        if ("$text".StartsWith("=")) { Set-CellFormulaText $rng $text $fmt } else { $rng.Value2 = $text }
         $rng.HorizontalAlignment = -4108
         $rng.VerticalAlignment = -4108
         $rng.WrapText = $true
@@ -961,11 +1023,11 @@ function Add-WorkOrderSheet {
                 & $labelCell $r1 8 11 "ISSUED TO SHOP DATE"
                 & $labelCell $r1 12 15 "DATE DUE"
                 & $labelCell $r1 16 17 "CWI REQ'D"
-                & $valueCell $r2 1 4 $ProjectManagers
-                & $valueCell $r2 5 7 ((@($OurJob, $wo.Sequence) | Where-Object { $_ }) -join " / ")
-                & $valueCell $r2 8 11 $IssuedDate
+                & $valueCell $r2 1 4 "=Set_ProjectManagers"
+                & $valueCell $r2 5 7 "=TEXTJOIN("" / "",TRUE,Set_OurJob,""$($wo.Sequence)"")"
+                & $valueCell $r2 8 11 "=Set_IssuedDate" "m/d/yy"
                 & $valueCell $r2 12 15 $(if ($wo.DueDate) { $wo.DueDate } else { "3 WKS AFTER`nMATERIAL ARRIVES" })
-                & $valueCell $r2 16 17 "N/A"
+                & $valueCell $r2 16 17 "=Set_CWI"
                 & $labelCell $r3 1 3 "DWGS APPROVED"
                 & $labelCell $r3 4 6 "CUSTOMER JOB#"
                 & $labelCell $r3 7 9 "SEQUENCE"
@@ -973,7 +1035,7 @@ function Add-WorkOrderSheet {
                 & $labelCell $r3 14 16 "DATE COMPLETED"
                 & $labelCell $r3 17 17 "QC DATE"
                 & $valueCell $r4 1 3 ""
-                & $valueCell $r4 4 6 $CustomerJob
+                & $valueCell $r4 4 6 "=Set_CustomerJob"
                 & $valueCell $r4 7 9 $wo.Sequence
                 & $valueCell $r4 10 13 $wo.TL
                 & $valueCell $r4 14 16 ""
@@ -3104,6 +3166,9 @@ if ($laborData.Count -gt 0) {
 }
 
 
+# --- SETTINGS TAB: the named cells the labels, work orders and Statistics read ---
+[void](Add-SettingsSheet -Workbook $workbook -Title $projectName.ToUpper() -CustomerJob $jobNumber -OurJob $ourJobNumber -Initials $issuedBy -ProjectManagers "Tyler / Matt / Rob")
+
 # --- TAB 0: PROJECT STATISTICS (Excel formulas only) ---
 Write-Log "Building front statistics dashboard..."
 $dashboard = $workbook.Sheets.Add([Type]::Missing, $workbook.Sheets.Item($workbook.Sheets.Count))
@@ -3150,12 +3215,12 @@ $dashboard.Range("A2:W2").RowHeight = 18
 
 # Executive Information Cards (Row 4 - 5)
 $dashboard.Cells.Item(4, 1) = "PROJECT NAME"
-$dashboard.Cells.Item(5, 1) = $projectName
+$dashboard.Cells.Item(5, 1).Formula = "=Set_Title"
 $dashboard.Range("A4:B4").Merge()
 $dashboard.Range("A5:B5").Merge()
 
 $dashboard.Cells.Item(4, 3) = "JOB NUMBER"
-$dashboard.Cells.Item(5, 3) = $jobNumber
+$dashboard.Cells.Item(5, 3).Formula = "=TEXTJOIN("" / "",TRUE,Set_CustomerJob,Set_OurJob)"
 $dashboard.Range("C4:D4").Merge()
 $dashboard.Range("C5:D5").Merge()
 
@@ -3842,7 +3907,7 @@ if ($requiredAssmPath) {
                     [PSCustomObject]@{ TL = $tl.TL; IsRev = $tl.IsRev; Sequence = $seq; DueDate = $due; Notes = $notes }
                 }
             })
-            [void](Add-FolderLabelSheet -Workbook $workbook -Labels $labelData -OurJob $ourJobNumber -Title $projectName.ToUpper() -CustomerJob $jobNumber -IssuedBy $issuedBy)
+            [void](Add-FolderLabelSheet -Workbook $workbook -Labels $labelData)
             foreach ($l in $labelData) {
                 $line1 = (@($ourJobNumber, $l.TL, $l.Sequence) | Where-Object { $_ }) -join " - "
                 Write-Log "  Label: $line1 | $($l.Notes) | $($l.DueDate)" "Cyan"
@@ -3861,8 +3926,6 @@ if ($requiredAssmPath) {
 if ($modeChoice -ne "2") {
     Write-Log "Building TERRA Work Order tab..."
     try {
-        $workOrderManagers = "Tyler / Matt / Rob"
-        $workOrderIssued = (Get-Date).ToString('M/d/yy', [System.Globalization.CultureInfo]::InvariantCulture)
         # NOTES column: paint info per sequence from the Required Assm workbook (TL Notes tab), else "NO PAINT"
         $workOrderNotes = @{}
         if ($allWorkbookTLs) {
@@ -3886,7 +3949,7 @@ if ($modeChoice -ne "2") {
             if ($tlEntry.IsRev) { foreach ($set in $tlEntry.SeqAssemblies.Values) { foreach ($asm in $set) { $revAssemblies[$asm] = [int]$tlEntry.Number } } }
         }
         $workOrderPages = @(Get-WorkOrderPages -MasterData $masterData -SeqNotes $workOrderNotes -RevAssemblies $revAssemblies -TlNames $tlNames -DueDates $workOrderDue | Sort-Object TlNumber, Sequence)
-        [void](Add-WorkOrderSheet -Workbook $workbook -Pages $workOrderPages -OurJob $ourJobNumber -CustomerJob $jobNumber -ProjectManagers $workOrderManagers -IssuedDate $workOrderIssued -LogoBase64 $script:TerraLogoBase64)
+        [void](Add-WorkOrderSheet -Workbook $workbook -Pages $workOrderPages -LogoBase64 $script:TerraLogoBase64)
         Write-Log "TERRA Work Order tab ready: $($workOrderPages.Count) work order(s), one per TL and sequence." "Green"
     }
     catch {
@@ -3896,6 +3959,7 @@ if ($modeChoice -ne "2") {
 
 # Sheet presentation setup
 $dashboard.Move($workbook.Sheets.Item(1))
+$workbook.Sheets.Item("Settings").Move([Type]::Missing, $dashboard)   # Settings sits right after Statistics
 $dashboard.Activate()
 $excel.ActiveWindow.DisplayGridlines = $true
 $dashboard.Range("A7").Select()

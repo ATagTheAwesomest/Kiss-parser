@@ -131,7 +131,7 @@ Needs a `*REQUIRED ASSM*.xlsx` in the run folder (git-ignored like every other j
 | `TL Name` (header) | Transmittal, e.g. `TL1296`. A REV is `TLR1301` and keeps the `R` on the label. Columns that are not named `TL#### / TLR####`, or that hold no assembly numbers, are ignored. |
 | Rows under the header | AFCO assembly numbers. The first 4 digits are the sequence (an `R` prefix is ignored). Each unique sequence in a column gets its own label (line 1). |
 
-**Coating and due date come from the `TL Notes` tab** ("Sequence Details Register"), which is keyed by 4-digit sequence: columns `Sequence`, `Paint / Details`, `Explanation`, `Due Date`. Each label takes its own sequence's `Paint / Details` (right of line 2) and `Due Date` (line 3, as `DUE <date>`); real dates are shown as `M/d/yy`, text as typed, blank = left out. `Explanation` is not used. The tab holds the yellow input table plus a formula-spilled copy; the first non-blank value per sequence is used.
+**Coating and due date come from the `TL Notes` tab** ("Sequence Details Register"), which is keyed by 4-digit sequence: columns `Sequence`, `Paint / Details`, `Explanation`, `Due Date`. Each label takes its own sequence's `Paint / Details` (line 3, left) and `Due Date` (line 3, right, as `DUE <date>`); real dates are shown as `M/d/yy`, text as typed, blank = left out. `Explanation` is not used. The tab holds the yellow input table plus a formula-spilled copy; the first non-blank value per sequence is used.
 
 The Sheet1 `Explanation` row is not used. The other tabs in that workbook are formulas over Sheet1 and are not read.
 
@@ -139,9 +139,9 @@ The Sheet1 `Explanation` row is not used. The other tabs in that workbook are fo
 
 | Line | Content |
 |---|---|
-| 1 (big) | `<our job> - <TL> - <sequence>`, e.g. `26102 - TL1296 - 5131`. On a REV (`TLR1301`) only the `R` is italic. Our job is typed at the prompt (default: leading digits of the Required Assm file name). The AFCO job number is not on the label. |
-| 2 (small) | Left: `<project name>`. Right: coating. |
-| 3 (big) | `DUE <m/d/yy>` from the `TL Notes` due date. With no due date it prints the placeholder `DUE    /    /` to fill in later. |
+| 1 (big) | `<our job> - <TL> - <sequence>`, e.g. `26102 - TL1296 - 5131`. On a REV (`TLR1301`) only the `R` is italic. Our job is typed at the prompt (default: leading digits of the Required Assm file name). |
+| 2 (small) | Left: `<project name> - <customer job number>` (the KSS header job number as written, e.g. `PROJECT FRONTIER - 25-351`). Right-aligned: `ISSUED: <initials>`, the initials asked at the prompt "Initials of who is making the folders" (Enter = `AP`; the word is `$IssuedLabel` in `Add-FolderLabelSheet`). |
+| 3 | Left (11 pt, comments / paint info): the sequence's `Paint / Details` from `TL Notes`, blank if none. Right-aligned (18 pt bold): `DUE <m/d/yy>` from the `TL Notes` due date, or the placeholder `DUE    /    /` to fill in later. |
 
 **Print setup (tab `Folder Labels`):** each label is a 3.5 in x 1.125 in block (252 x 81 pt) of three rows (40.5 + 15 + 25.5 pt), with a manual page break between labels, margins 0, landscape, centered, print area covering the labels only, scaling set to fit all columns on one page. Select the Dymo as the printer with the 3.5 x 1.125 in address label size (e.g. 30252), then print the tab. Text shrinks to fit. If a label clips or spills onto an extra page, check the Dymo paper size in Page Setup. Excel cannot create a custom paper size by itself, so the paper size comes from the Dymo driver.
 

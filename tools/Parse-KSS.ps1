@@ -508,7 +508,9 @@ function Read-RequiredAssm {
 # Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 40.5 + 15 + 25.5 = 81 pt.
 # Margins are 0 and the page is set to fit all columns on one page, so the text stays inside the printable area.
 function Add-FolderLabelSheet {
-    param($Workbook, $Labels, [string]$OurJob, [string]$Title)
+    param($Workbook, $Labels, [string]$OurJob, [string]$Title, [string]$CustomerJob, [string]$IssuedBy)
+
+    $IssuedLabel = "ISSUED:"   # word printed before the initials on line 2
 
     $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
     $sheet.Name = "Folder Labels"
@@ -526,8 +528,8 @@ function Add-FolderLabelSheet {
             $w = $w * ($pts / $cur)
         }
     }
-    & $setWidth $sheet.Columns.Item(1) 156
-    & $setWidth $sheet.Columns.Item(2) 96
+    & $setWidth $sheet.Columns.Item(1) 132
+    & $setWidth $sheet.Columns.Item(2) 120
 
     # Alignment constants: xlLeft = -4131, xlRight = -4152, xlCenter = -4108
     $i = 0
@@ -553,28 +555,33 @@ function Add-FolderLabelSheet {
         $cell1.VerticalAlignment = -4108
         $cell1.ShrinkToFit = $true
 
-        # Line 2 (small): job title on the left, coating on the right
+        # Line 2 (small): project title - customer job on the left, "ISU'D: initials" on the right
         $cellL = $sheet.Cells.Item($r2, 1)
-        $cellL.Value2 = $Title
+        $cellL.Value2 = (@($Title, $CustomerJob) | Where-Object { $_ }) -join " - "
         $cellL.Font.Size = 10
         $cellL.HorizontalAlignment = -4131
         $cellL.VerticalAlignment = -4108
         $cellL.ShrinkToFit = $true
         $cellR = $sheet.Cells.Item($r2, 2)
-        $cellR.Value2 = $label.Coating
+        $cellR.Value2 = "$IssuedLabel $IssuedBy"
         $cellR.Font.Size = 10
         $cellR.HorizontalAlignment = -4152
         $cellR.VerticalAlignment = -4108
         $cellR.ShrinkToFit = $true
 
-        # Line 3: due date (blank date = slashes to fill in later)
-        $cell3 = $sheet.Range($sheet.Cells.Item($r3, 1), $sheet.Cells.Item($r3, 2))
-        $cell3.Merge()
-        $cell3.Value2 = if ($label.DueDate) { "DUE $($label.DueDate)" } else { "DUE    /    /" }
-        $cell3.Font.Size = 18
-        $cell3.HorizontalAlignment = -4108
-        $cell3.VerticalAlignment = -4108
-        $cell3.ShrinkToFit = $true
+        # Line 3: comments / paint info on the left, due date on the right (blank date = slashes to fill in later)
+        $cellC = $sheet.Cells.Item($r3, 1)
+        $cellC.Value2 = $label.Notes
+        $cellC.Font.Size = 11
+        $cellC.HorizontalAlignment = -4131
+        $cellC.VerticalAlignment = -4108
+        $cellC.ShrinkToFit = $true
+        $cellD = $sheet.Cells.Item($r3, 2)
+        $cellD.Value2 = if ($label.DueDate) { "DUE $($label.DueDate)" } else { "DUE    /    /" }
+        $cellD.Font.Size = 18
+        $cellD.HorizontalAlignment = -4152
+        $cellD.VerticalAlignment = -4108
+        $cellD.ShrinkToFit = $true
 
         $i++
     }
@@ -1871,6 +1878,7 @@ if ($allTLs.Count -gt 0) { Write-Log "Transmittals: $($allTLs -join ', ')" "Cyan
 # Folder labels: optional Required Assm workbook (asked once, built later inside the BOM workbook)
 $requiredAssmPath = $null
 $ourJobNumber = ""
+$issuedBy = ""
 if ($modeChoice -ne "2") {
     $requiredAssmPath = Select-RequiredAssmFile
     if ($requiredAssmPath) {
@@ -1879,6 +1887,8 @@ if ($modeChoice -ne "2") {
         $jobPrompt = if ($guessJob) { "Our job number (default: $guessJob)" } else { "Our job number (shown first on the label)" }
         $ourJobInput = (Read-Host $jobPrompt).Trim()
         $ourJobNumber = if ($ourJobInput) { $ourJobInput } else { $guessJob }
+        $issuedBy = (Read-Host "Initials of who is making the folders (default: AP)").Trim().ToUpper()
+        if (-not $issuedBy) { $issuedBy = "AP" }
     }
 }
 
@@ -3342,13 +3352,13 @@ if ($requiredAssmPath) {
                     $note = $tl.SeqNotes[$seq]
                     $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tl.DueDate }
                     $coat = if ($note -and $note.Coating) { $note.Coating } else { $tl.Coating }
-                    [PSCustomObject]@{ TL = $tl.TL; IsRev = $tl.IsRev; Sequence = $seq; DueDate = $due; Coating = $coat }
+                    [PSCustomObject]@{ TL = $tl.TL; IsRev = $tl.IsRev; Sequence = $seq; DueDate = $due; Notes = $coat }
                 }
             })
-            [void](Add-FolderLabelSheet -Workbook $workbook -Labels $labelData -OurJob $ourJobNumber -Title $projectName.ToUpper())
+            [void](Add-FolderLabelSheet -Workbook $workbook -Labels $labelData -OurJob $ourJobNumber -Title $projectName.ToUpper() -CustomerJob $jobNumber -IssuedBy $issuedBy)
             foreach ($l in $labelData) {
                 $line1 = (@($ourJobNumber, $l.TL, $l.Sequence) | Where-Object { $_ }) -join " - "
-                Write-Log "  Label: $line1 | $($l.DueDate) | $($l.Coating)" "Cyan"
+                Write-Log "  Label: $line1 | $($l.Notes) | $($l.DueDate)" "Cyan"
             }
             Write-Log "Folder Labels tab ready: $($labelData.Count) label(s). Print that tab on the Dymo (3.5 x 1.125 in)." "Green"
         }

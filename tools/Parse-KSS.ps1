@@ -509,7 +509,7 @@ function Read-RequiredAssm {
     return @($result | Sort-Object Number)
 }
 
-# Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 40.5 + 15 + 25.5 = 81 pt.
+# Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 40.5 + 15 + 24.75 + 0.75 (spacer so the bottom border prints) = 81 pt.
 # Margins are 0 and the page is set to fit all columns on one page, so the text stays inside the printable area.
 function Add-FolderLabelSheet {
     param($Workbook, $Labels, [string]$OurJob, [string]$Title, [string]$CustomerJob, [string]$IssuedBy)
@@ -538,11 +538,12 @@ function Add-FolderLabelSheet {
     # Alignment constants: xlLeft = -4131, xlRight = -4152, xlCenter = -4108
     $i = 0
     foreach ($label in $Labels) {
-        $r1 = 3 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2
+        $r1 = 4 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2; $r4 = $r1 + 3
 
         $sheet.Rows.Item($r1).RowHeight = 40.5
         $sheet.Rows.Item($r2).RowHeight = 15
-        $sheet.Rows.Item($r3).RowHeight = 25.5
+        $sheet.Rows.Item($r3).RowHeight = 24.75
+        $sheet.Rows.Item($r4).RowHeight = 0.75      # spacer: the page ends below the last border, so the bottom line is not clipped
 
         # Line 1: our job - transmittal - sequence (big)
         $jobParts = @($OurJob, $label.TL, $label.Sequence) | Where-Object { $_ }
@@ -558,6 +559,7 @@ function Add-FolderLabelSheet {
         $cell1.HorizontalAlignment = -4108
         $cell1.VerticalAlignment = -4108
         $cell1.ShrinkToFit = $true
+        Set-LabelCellBorder $cell1
 
         # Line 2 (small): project title - customer job on the left, "ISU'D: initials" on the right
         $cellL = $sheet.Cells.Item($r2, 1)
@@ -566,12 +568,14 @@ function Add-FolderLabelSheet {
         $cellL.HorizontalAlignment = -4131
         $cellL.VerticalAlignment = -4108
         $cellL.ShrinkToFit = $true
+        Set-LabelCellBorder $cellL
         $cellR = $sheet.Cells.Item($r2, 2)
         $cellR.Value2 = (@($IssuedLabel, $IssuedBy) | Where-Object { $_ }) -join " "
         $cellR.Font.Size = 10
         $cellR.HorizontalAlignment = -4152
         $cellR.VerticalAlignment = -4108
         $cellR.ShrinkToFit = $true
+        Set-LabelCellBorder $cellR
 
         # Line 3: comments / paint info on the left, due date on the right (blank date = slashes to fill in later)
         $cellC = $sheet.Cells.Item($r3, 1)
@@ -580,23 +584,35 @@ function Add-FolderLabelSheet {
         $cellC.HorizontalAlignment = -4131
         $cellC.VerticalAlignment = -4108
         $cellC.ShrinkToFit = $true
+        Set-LabelCellBorder $cellC
         $cellD = $sheet.Cells.Item($r3, 2)
         $cellD.Value2 = if ($label.DueDate) { "DUE $($label.DueDate)" } else { "DUE    /    /" }
         $cellD.Font.Size = 18
         $cellD.HorizontalAlignment = -4152
         $cellD.VerticalAlignment = -4108
         $cellD.ShrinkToFit = $true
+        Set-LabelCellBorder $cellD
 
         $i++
     }
 
-    $lastRow = 3 * $Labels.Count
+    $lastRow = 4 * $Labels.Count
     $sheet.Range("D1").Value2 = "Print this tab on the Dymo (3.5 x 1.125 in address label). One label per page."
     $sheet.Range("D1").Font.Bold = $false
     $sheet.Range("D1").Font.Italic = $true
 
-    Set-LabelPrintSetup -Sheet $sheet -LastCol "B" -RowsPerLabel 3 -LabelCount $Labels.Count
+    Set-LabelPrintSetup -Sheet $sheet -LastCol "B" -RowsPerLabel 4 -LabelCount $Labels.Count
     return $sheet
+}
+
+# Thin black border on all four edges of a label cell (applied to the whole range, so merged cells get a full outline).
+function Set-LabelCellBorder ($Range) {
+    foreach ($edge in 7, 8, 9, 10) {            # xlEdgeLeft, xlEdgeTop, xlEdgeBottom, xlEdgeRight
+        $b = $Range.Borders.Item($edge)
+        $b.LineStyle = 1                          # xlContinuous
+        $b.Weight = 2                             # xlThin
+        $b.Color = 0
+    }
 }
 
 # Print setup shared by the label tabs: one 3.5 x 1.125 in label per page, margins 0, fit all columns on one page.
@@ -664,10 +680,11 @@ function Add-TlLabelSheet {
 
     $i = 0
     foreach ($tl in $TLs) {
-        $r1 = 3 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2
+        $r1 = 4 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2; $r4 = $r1 + 3
         $sheet.Rows.Item($r1).RowHeight = 33
         $sheet.Rows.Item($r2).RowHeight = 30
-        $sheet.Rows.Item($r3).RowHeight = 18
+        $sheet.Rows.Item($r3).RowHeight = 17.25
+        $sheet.Rows.Item($r4).RowHeight = 0.75      # spacer: the page ends below the last border, so the bottom line is not clipped
 
         # Row 1: the transmittal (a REV gets the left 8 columns plus a small "REVISES ..." on the right 4)
         $revises = if ($tl.IsRev) { @(Get-RevisedTransmittals -Tl $tl -AllTLs $AllTLs -Sequences $tl.Sequences | ForEach-Object { $_.TL }) } else { @() }
@@ -679,6 +696,7 @@ function Add-TlLabelSheet {
         $tlCell.HorizontalAlignment = -4108
         $tlCell.VerticalAlignment = -4108
         $tlCell.ShrinkToFit = $true
+        Set-LabelCellBorder $tlCell
         if ($tl.IsRev) { $tlCell.Characters(3, 1).Font.Italic = $true }   # the R of TLR####
         if ($revises.Count -gt 0) {
             $revCell = $sheet.Range($sheet.Cells.Item($r1, 9), $sheet.Cells.Item($r1, 12))
@@ -688,6 +706,7 @@ function Add-TlLabelSheet {
             $revCell.HorizontalAlignment = -4152
             $revCell.VerticalAlignment = -4108
             $revCell.ShrinkToFit = $true
+            Set-LabelCellBorder $revCell
         }
 
         # Rows 2 and 3: each sequence big, its due date small underneath
@@ -706,6 +725,7 @@ function Add-TlLabelSheet {
             $seqCell.HorizontalAlignment = -4108
             $seqCell.VerticalAlignment = -4108
             $seqCell.ShrinkToFit = $true
+            Set-LabelCellBorder $seqCell
 
             $dueCell = $sheet.Range($sheet.Cells.Item($r3, $col), $sheet.Cells.Item($r3, $last))
             $dueCell.Merge()
@@ -714,12 +734,13 @@ function Add-TlLabelSheet {
             $dueCell.HorizontalAlignment = -4108
             $dueCell.VerticalAlignment = -4108
             $dueCell.ShrinkToFit = $true
+            Set-LabelCellBorder $dueCell
             $col = $last + 1
         }
         $i++
     }
 
-    Set-LabelPrintSetup -Sheet $sheet -LastCol "L" -RowsPerLabel 3 -LabelCount $TLs.Count
+    Set-LabelPrintSetup -Sheet $sheet -LastCol "L" -RowsPerLabel 4 -LabelCount $TLs.Count
     return $sheet
 }
 
@@ -782,7 +803,7 @@ function Format-FeetInches16 ($lengthStr) {
 
 # One row per assembly: Item data for the report. Part qtys in a KISS D block are totals for the assembly qty.
 function Get-WorkOrderPages {
-    param($MasterData, $SeqNotes, [string]$DefaultNotes = "NO PAINT", $RevAssemblies = $null, $TlNames = $null)
+    param($MasterData, $SeqNotes, [string]$DefaultNotes = "NO PAINT", $RevAssemblies = $null, $TlNames = $null, $DueDates = $null)
 
     $rows = foreach ($g in ($MasterData | Group-Object -Property TL, Assembly)) {
         $parts = @($g.Group)
@@ -820,6 +841,7 @@ function Get-WorkOrderPages {
             Sequence = $first.Sequence
             TL = if ($TlNames -and $TlNames.ContainsKey($first.TlNumber)) { $TlNames[$first.TlNumber] } else { "TL$($first.TlNumber)" }
             TlNumber = $first.TlNumber
+            DueDate = if ($DueDates -and $DueDates.ContainsKey("$($first.TlNumber)|$($first.Sequence)")) { $DueDates["$($first.TlNumber)|$($first.Sequence)"] } else { "" }
             Notes = if ($note -and $note.Coating) { $note.Coating } else { $DefaultNotes }
             Items = $items
         }
@@ -942,7 +964,7 @@ function Add-WorkOrderSheet {
                 & $valueCell $r2 1 4 $ProjectManagers
                 & $valueCell $r2 5 7 ((@($OurJob, $wo.Sequence) | Where-Object { $_ }) -join " / ")
                 & $valueCell $r2 8 11 $IssuedDate
-                & $valueCell $r2 12 15 "3 WKS AFTER`nMATERIAL ARRIVES"
+                & $valueCell $r2 12 15 $(if ($wo.DueDate) { $wo.DueDate } else { "3 WKS AFTER`nMATERIAL ARRIVES" })
                 & $valueCell $r2 16 17 "N/A"
                 & $labelCell $r3 1 3 "DWGS APPROVED"
                 & $labelCell $r3 4 6 "CUSTOMER JOB#"
@@ -3852,13 +3874,18 @@ if ($modeChoice -ne "2") {
                 }
             }
         }
-        $revAssemblies = @{}; $tlNames = @{}
+        $revAssemblies = @{}; $tlNames = @{}; $workOrderDue = @{}
         foreach ($tlEntry in @($allWorkbookTLs | Sort-Object Number)) {
             if (-not $tlEntry) { continue }
             $tlNames[[int]$tlEntry.Number] = $tlEntry.TL
+            foreach ($seq in $tlEntry.Sequences) {   # same due date as the folder label stickers
+                $note = $tlEntry.SeqNotes[$seq]
+                $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tlEntry.DueDate }
+                if ($due) { $workOrderDue["$([int]$tlEntry.Number)|$seq"] = $due }
+            }
             if ($tlEntry.IsRev) { foreach ($set in $tlEntry.SeqAssemblies.Values) { foreach ($asm in $set) { $revAssemblies[$asm] = [int]$tlEntry.Number } } }
         }
-        $workOrderPages = @(Get-WorkOrderPages -MasterData $masterData -SeqNotes $workOrderNotes -RevAssemblies $revAssemblies -TlNames $tlNames | Sort-Object TlNumber, Sequence)
+        $workOrderPages = @(Get-WorkOrderPages -MasterData $masterData -SeqNotes $workOrderNotes -RevAssemblies $revAssemblies -TlNames $tlNames -DueDates $workOrderDue | Sort-Object TlNumber, Sequence)
         [void](Add-WorkOrderSheet -Workbook $workbook -Pages $workOrderPages -OurJob $ourJobNumber -CustomerJob $jobNumber -ProjectManagers $workOrderManagers -IssuedDate $workOrderIssued -LogoBase64 $script:TerraLogoBase64)
         Write-Log "TERRA Work Order tab ready: $($workOrderPages.Count) work order(s), one per TL and sequence." "Green"
     }

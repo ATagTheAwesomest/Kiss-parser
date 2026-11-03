@@ -65,6 +65,7 @@ A `D` line must have at least 10 comma-separated fields to be accepted. Fields a
 2. **File picker:** lists every `.kss` in the current folder (arrow keys and Space to check, `A` all, `N` none, Enter to confirm). It hides files whose names contain `- Filtered Assemblies` or `(Generated)`, so the script's own outputs aren't re-read.
 3. **TL (transmittal) detection:** the TL tag comes from the **file name**, matching `TL` followed by digits (`TL1282`, `TL 12`, `TL_012`, `TL-12` all become `TL<digits>`). If none is found, the operator is asked to type one or leave it blank. This is why file names matter.
 4. **Parse:** each file is read line by line and `H`, `A`, `D`, `L` lines are collected into in-memory lists (Master data and Labor data). The first file's `H` line sets the job number and project name. If a later file's header differs, a yellow warning is shown and the first file's values are kept.
+4b. **Folder labels (optional):** if the folder holds a `... REQUIRED ASSM.xlsx`, the script offers to add a `Folder Labels` tab to the BOM workbook (section 6a). It asks for our job number (default: the leading digits of the file name, e.g. `26102`).
 5. **Assembly whitelist (optional):** limits the run to listed assemblies (section 5).
 6. **REV override (only if the whitelist has `R` entries):** replace older TL versions of an assembly.
 7. **Duplicate handling (only if more than one file):** `M`erge identical part marks across files into one row (default), or `S`eparate to keep each file's rows apart by TL. Merging warns when the same mark has a different shape/size/grade/length in different files.
@@ -106,7 +107,7 @@ REV override keeps the newest TL (highest number in the file name) for each asse
 
 ## 6. Outputs
 
-**Workbook tabs:** Master BOM (16 columns: TL, Assembly, Drawing, MainMark, PartMark, Qty, Category, Shape, Size, Length, Grade, Description, Unit Wt, Total Wt, Status, SourceFile), Plates & Sheets, Profiles, Hardware & Fasteners, Shop Assemblies (one block per assembly, with a VARIANCE note when the same assembly is defined differently in different files), Labor & Weld Operations, and Statistics (dashboard of formulas). Plate/profile/hardware tabs print "No ... Data Found" when empty.
+**Workbook tabs:** Master BOM (16 columns: TL, Assembly, Drawing, MainMark, PartMark, Qty, Category, Shape, Size, Length, Grade, Description, Unit Wt, Total Wt, Status, SourceFile), Plates & Sheets, Profiles, Hardware & Fasteners, Shop Assemblies (one block per assembly, with a VARIANCE note when the same assembly is defined differently in different files), Labor & Weld Operations, and Statistics (dashboard of formulas), and, when a Required Assm workbook is used, Folder Labels (section 6a). Plate/profile/hardware tabs print "No ... Data Found" when empty.
 
 **File naming:** `<Project> - Job <Job> - <TL1>_<TL2>... BOM.xlsx`. If the old file is locked, a timestamp is appended instead. With many TLs the name is shortened to `<first>-<last> (n TLs)`.
 
@@ -116,6 +117,36 @@ REV override keeps the newest TL (highest number in the file name) for each asse
 - `Sort-PlatesByThickness - <label>.bat`: moves each `<partmark>.dxf` into a folder named by decimal thickness. It looks in a `dxf\` subfolder if one exists, otherwise the batch file's own folder. Reports moved and missing counts.
 - `Type-Quantities - <label>.bat` and `Type-Grades - <label>.bat`: after a 5-second countdown, type each plate's total qty or grade into the active window (ProNest) with SendKeys, pressing Down after each. Rows are sorted by part mark (A-Z). The operator must click the first cell first.
 - `Master-ShopScripts - <TLs>.bat`: `Write-MasterScript` exists but is **never called** (it appears only as a definition), and the script ends by logging "Generated shop scripts without a master launcher." So no master menu is generated today.
+
+## 6a. Folder labels (Required Assm workbook)
+
+Needs a `*REQUIRED ASSM*.xlsx` in the run folder (git-ignored like every other job file). Not used in Soundwall CSV mode.
+
+**Reads `Sheet1`** (the first sheet with a `TL Name` cell in column A). One column per transmittal:
+
+| Row | Used for |
+|---|---|
+| `Paint / TL Details` (above the header) | Fallback coating for the whole transmittal, used only when the `TL Notes` tab has none for that sequence. |
+| `Due Date` (above the header) | Fallback due date, same rule. |
+| `TL Name` (header) | Transmittal, e.g. `TL1296`. A REV is `TLR1301` and keeps the `R` on the label. Columns that are not named `TL#### / TLR####`, or that hold no assembly numbers, are ignored. |
+| Rows under the header | AFCO assembly numbers. The first 4 digits are the sequence (an `R` prefix is ignored). Each unique sequence in a column gets its own label (line 1). |
+
+**Coating and due date come from the `TL Notes` tab** ("Sequence Details Register"), which is keyed by 4-digit sequence: columns `Sequence`, `Paint / Details`, `Explanation`, `Due Date`. Each label takes its own sequence's `Paint / Details` (line 3, left) and `Due Date` (line 3, right, as `DUE <date>`); real dates are shown as `M/d/yy`, text as typed, blank = left out. `Explanation` is not used. The tab holds the yellow input table plus a formula-spilled copy; the first non-blank value per sequence is used.
+
+The Sheet1 `Explanation` row is not used. The other tabs in that workbook are formulas over Sheet1 and are not read.
+
+**One label per TL and sequence** (one per folder), sorted by TL number, then sequence. If KSS files were selected for the run, only transmittals matching a selected file's TL number get a label (`TL1301.kss` matches `TLR1301`); skipped ones are reported in yellow.
+
+| Line | Content |
+|---|---|
+| 1 (big) | `<our job> - <TL> - <sequence>`, e.g. `26102 - TL1296 - 5131`. On a REV (`TLR1301`) only the `R` is italic. Our job is typed at the prompt (default: leading digits of the Required Assm file name). |
+| 2 (small) | Left: `<project name> - <customer job number>` (the KSS header job number as written, e.g. `PROJECT FRONTIER - 25-351`). Right-aligned: `IS: <initials>`, the initials typed at the prompt "Initials of who is making the folders". Left blank it prints just `IS:` to hand-write (the text is `$IssuedLabel` in `Add-FolderLabelSheet`). |
+| 3 | Left (11 pt, comments / paint info): the sequence's `Paint / Details` from `TL Notes`, blank if none. On a REV (`TLR####`) label it starts with `REVISES TL1296` (several: `REVISES TL1296, TL1313`): the transmittals in the Required Assm workbook that hold any of the same assembly numbers (digits only, so an `R` prefix is ignored) within that sequence. Other REV transmittals are listed only when no non-REV one matches. Paint text follows after ` - `. Right-aligned (18 pt bold): `DUE <m/d/yy>` from the `TL Notes` due date, or the placeholder `DUE    /    /` to fill in later. |
+
+**Print setup (tab `Folder Labels`):** each label is a 3.5 in x 1.125 in block (252 x 81 pt) of three rows (40.5 + 15 + 25.5 pt), with a manual page break between labels, margins 0, landscape, centered, print area covering the labels only, scaling set to fit all columns on one page. Select the Dymo as the printer with the 3.5 x 1.125 in address label size (e.g. 30252), then print the tab. Text shrinks to fit. If a label clips or spills onto an extra page, check the Dymo paper size in Page Setup. Excel cannot create a custom paper size by itself, so the paper size comes from the Dymo driver.
+
+**`TL Labels` tab:** built automatically right after `Folder Labels` from the same data (no extra prompt), one 3.5 x 1.125 in label per transmittal, ordered by TL number, with the same print setup (margins 0, fit all columns on one page, a page break between labels). Rows: (1) the transmittal big and centered, e.g. `TL1296`; (2) that transmittal's sequences big, side by side and evenly spread (a 12-column grid, so 1 to 6 sequences share the width; more than 6 shrink to fit); (3) under each sequence its `DUE <m/d/yy>` from `TL Notes` in small type, or `DUE    /    /` when none. A REV (`TLR1301`) is different: the `R` is italic and the right third of row 1 carries a small `REVISES TL1296`, found the same way as on the Folder Labels tab (union over the REV's sequences). Our job number and the customer job are not on this tab.
+Assumptions: the due date text is used as typed in the sheet (real dates are shown as `M/d/yy`); coating comes only from the `Paint / TL Details` row, not from the KSS Finish field.
 
 ## 7. Soundwall CSV mode
 

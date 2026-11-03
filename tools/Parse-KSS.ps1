@@ -354,6 +354,375 @@ function ConvertTo-TransmittalTag ($text) {
     return ($t -replace '\s', '')
 }
 
+# --- FOLDER LABELS (from the "Required Assm" workbook) ---
+# Looks for a "... REQUIRED ASSM.xlsx" in the current folder. Its Sheet1 has one column per transmittal:
+# TL name in the "TL Name" row, the AFCO assembly numbers underneath, and optional "Paint / TL Details" and
+# "Due Date" rows above. A REV transmittal is named TLR####. Each transmittal + sequence (folder) becomes one 3.5" x 1.125" label.
+function Select-RequiredAssmFile {
+    $files = @(Get-ChildItem -LiteralPath (Get-Location).Path -Filter *.xlsx -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike '~$*' -and $_.Name -match '(?i)required[\s_-]*assm' } |
+        Sort-Object Name)
+    if ($files.Count -eq 0) { return $null }
+
+    Write-Host ""
+    Write-Host "========================================================"
+    Write-Host "  FOLDER LABELS (Required Assm workbook)"
+    Write-Host "========================================================"
+    if ($files.Count -eq 1) {
+        Write-Host "Files: $($files[0].Name)"
+        Write-Host ""
+        Write-Host "  [Y]es (default): add a 'Folder Labels' tab to the BOM, one 3.5x1.125 label per transmittal and sequence"
+        Write-Host "  [N]o: skip the labels"
+        $choice = Read-Host "Build folder labels from this file? [Y]es / [N]o (default: Yes)"
+        if ($choice -match '^(n|no)$') { return $null }
+        return $files[0].FullName
+    }
+
+    Write-Host "Found $($files.Count) Required Assm workbooks:"
+    for ($i = 0; $i -lt $files.Count; $i++) { Write-Host "  [$($i + 1)] $($files[$i].Name)" }
+    Write-Host "  [0] Skip the folder labels"
+    $pick = Read-Host "Which file? (default: 1)"
+    if ($pick -match '^\s*0\s*$|^(n|no)$') { return $null }
+    $n = 1
+    if ($pick -match '^\s*(\d+)\s*$') { $n = [int]$Matches[1] }
+    if ($n -lt 1 -or $n -gt $files.Count) { $n = 1 }
+    return $files[$n - 1].FullName
+}
+
+function Read-RequiredAssm {
+    param($Excel, [string]$Path)
+
+    $result = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $wb = $Excel.Workbooks.Open($Path, 0, $true)
+    try {
+        foreach ($ws in $wb.Worksheets) {
+            $last = $ws.Cells.SpecialCells(11)   # xlCellTypeLastCell
+            $vals = $ws.Range($ws.Cells.Item(1, 1), $last).Value2
+            if ($vals -isnot [System.Array] -or $vals.Rank -ne 2) { continue }
+            $nRows = $vals.GetLength(0)
+            $nCols = $vals.GetLength(1)
+
+            # Header row: "TL Name" in column A
+            $hdr = 0
+            for ($r = 1; $r -le $nRows; $r++) {
+                if (("$($vals[$r, 1])").Trim() -match '^(?i)TL\s*Name$') { $hdr = $r; break }
+            }
+            if ($hdr -eq 0) { continue }
+
+            # Labeled rows above the header
+            $paintRow = 0; $dueRow = 0
+            for ($r = 1; $r -lt $hdr; $r++) {
+                $label = ("$($vals[$r, 1])").Trim()
+                if ($label -match '(?i)^paint|coating') { $paintRow = $r }
+                elseif ($label -match '(?i)^due') { $dueRow = $r }
+            }
+
+            for ($c = 2; $c -le $nCols; $c++) {
+                $name = ("$($vals[$hdr, $c])").Trim().ToUpper() -replace '\s', ''
+                if ($name -notmatch '^TLR?\d+$') { continue }
+
+                $seqs = [System.Collections.Generic.SortedSet[string]]::new()
+                $seqAssm = @{}                                    # sequence -> assembly numbers (digits only) in this column
+                $count = 0
+                for ($r = $hdr + 1; $r -le $nRows; $r++) {
+                    $v = $vals[$r, $c]
+                    if ($null -eq $v) { continue }
+                    $digits = ("$v").Trim() -replace '\D', ''     # drops an R (REV) prefix and anything else
+                    if ($digits.Length -lt 4) { continue }
+                    $count++
+                    [void]$seqs.Add($digits.Substring(0, 4))
+                    if (-not $seqAssm.ContainsKey($digits.Substring(0, 4))) { $seqAssm[$digits.Substring(0, 4)] = [System.Collections.Generic.HashSet[string]]::new() }
+                    [void]$seqAssm[$digits.Substring(0, 4)].Add($digits)
+                }
+                if ($count -eq 0) { continue }                    # unused column
+
+                $coating = ""
+                if ($paintRow -gt 0 -and $null -ne $vals[$paintRow, $c]) { $coating = ("$($vals[$paintRow, $c])").Trim() }
+                $due = ""
+                if ($dueRow -gt 0 -and $null -ne $vals[$dueRow, $c]) {
+                    $d = $vals[$dueRow, $c]
+                    if ($d -is [double]) { $due = [DateTime]::FromOADate($d).ToString('M/d/yy') }
+                    else { $due = ("$d").Trim() }
+                }
+
+                $result.Add([PSCustomObject]@{
+                    TL        = $name
+                    Number    = [int](($name -replace '\D', ''))
+                    IsRev     = ($name -like 'TLR*')
+                    Coating   = $coating
+                    DueDate   = $due
+                    Sequences = @($seqs)
+                    SeqAssemblies = $seqAssm
+                    Count     = $count
+                })
+            }
+            break   # first sheet that has a "TL Name" row
+        }
+    }
+    finally {
+        $wb.Close($false)
+    }
+    # Per-sequence details from the "TL Notes" tab (register keyed by 4-digit sequence). Used first; the
+    # Sheet1 rows above the TL header are only a fallback. The tab holds a formula-spilled copy of the same
+    # table next to the yellow input table, so the first non-blank value per sequence wins.
+    $seqNotes = @{}
+    $wb = $Excel.Workbooks.Open($Path, 0, $true)
+    try {
+        foreach ($ws in $wb.Worksheets) {
+            if ($ws.Name -notmatch '(?i)^\s*TL\s*Notes\s*$') { continue }
+            $last = $ws.Cells.SpecialCells(11)
+            $vals = $ws.Range($ws.Cells.Item(1, 1), $last).Value2
+            if ($vals -isnot [System.Array] -or $vals.Rank -ne 2) { break }
+            $nRows = $vals.GetLength(0)
+            $nCols = $vals.GetLength(1)
+            for ($hr = 1; $hr -le $nRows; $hr++) {
+                for ($hc = 1; $hc -le $nCols; $hc++) {
+                    if (("$($vals[$hr, $hc])").Trim() -notmatch '^(?i)sequence$') { continue }
+                    $paintCol = 0; $dueCol = 0
+                    for ($k = $hc + 1; $k -le [Math]::Min($nCols, $hc + 6); $k++) {
+                        $h = ("$($vals[$hr, $k])").Trim()
+                        if ($h -match '(?i)^paint|coating') { $paintCol = $k }
+                        elseif ($h -match '(?i)^due') { $dueCol = $k }
+                    }
+                    if ($paintCol -eq 0 -and $dueCol -eq 0) { continue }
+                    for ($r = $hr + 1; $r -le $nRows; $r++) {
+                        $seq = ("$($vals[$r, $hc])").Trim()
+                        if ($seq -notmatch '^\d{4}$') { continue }
+                        if (-not $seqNotes.ContainsKey($seq)) { $seqNotes[$seq] = @{ Coating = ""; DueDate = "" } }
+                        if ($paintCol -gt 0 -and -not $seqNotes[$seq].Coating -and $null -ne $vals[$r, $paintCol]) {
+                            $seqNotes[$seq].Coating = ("$($vals[$r, $paintCol])").Trim()
+                        }
+                        if ($dueCol -gt 0 -and -not $seqNotes[$seq].DueDate -and $null -ne $vals[$r, $dueCol]) {
+                            $d = $vals[$r, $dueCol]
+                            $seqNotes[$seq].DueDate = if ($d -is [double]) { [DateTime]::FromOADate($d).ToString('M/d/yy') } else { ("$d").Trim() }
+                        }
+                    }
+                }
+            }
+            break
+        }
+    }
+    finally {
+        $wb.Close($false)
+    }
+    foreach ($tlEntry in $result) { $tlEntry | Add-Member -NotePropertyName SeqNotes -NotePropertyValue $seqNotes }
+    return @($result | Sort-Object Number)
+}
+
+# Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 40.5 + 15 + 25.5 = 81 pt.
+# Margins are 0 and the page is set to fit all columns on one page, so the text stays inside the printable area.
+function Add-FolderLabelSheet {
+    param($Workbook, $Labels, [string]$OurJob, [string]$Title, [string]$CustomerJob, [string]$IssuedBy)
+
+    $IssuedLabel = "IS:"   # text printed before the initials on line 2 (alone if the initials are blank)
+
+    $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
+    $sheet.Name = "Folder Labels"
+    $sheet.Cells.NumberFormat = "@"
+    $sheet.Cells.Font.Name = "Arial"
+    $sheet.Cells.Font.Bold = $true
+
+    $setWidth = {
+        param($col, [double]$pts)
+        $w = $pts / 5.4
+        for ($k = 0; $k -lt 8; $k++) {
+            $col.ColumnWidth = $w
+            $cur = [double]$col.Width
+            if ([Math]::Abs($cur - $pts) -lt 0.8) { break }
+            $w = $w * ($pts / $cur)
+        }
+    }
+    & $setWidth $sheet.Columns.Item(1) 132
+    & $setWidth $sheet.Columns.Item(2) 120
+
+    # Alignment constants: xlLeft = -4131, xlRight = -4152, xlCenter = -4108
+    $i = 0
+    foreach ($label in $Labels) {
+        $r1 = 3 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2
+
+        $sheet.Rows.Item($r1).RowHeight = 40.5
+        $sheet.Rows.Item($r2).RowHeight = 15
+        $sheet.Rows.Item($r3).RowHeight = 25.5
+
+        # Line 1: our job - transmittal - sequence (big)
+        $jobParts = @($OurJob, $label.TL, $label.Sequence) | Where-Object { $_ }
+        $cell1 = $sheet.Range($sheet.Cells.Item($r1, 1), $sheet.Cells.Item($r1, 2))
+        $cell1.Merge()
+        $line1 = ($jobParts -join " - ")
+        $cell1.Value2 = $line1
+        $cell1.Font.Size = 26
+        if ($label.IsRev) {                      # REV transmittal: the R in TLR#### is italic
+            $rPos = $line1.IndexOf($label.TL) + 3
+            $cell1.Characters($rPos, 1).Font.Italic = $true
+        }
+        $cell1.HorizontalAlignment = -4108
+        $cell1.VerticalAlignment = -4108
+        $cell1.ShrinkToFit = $true
+
+        # Line 2 (small): project title - customer job on the left, "ISU'D: initials" on the right
+        $cellL = $sheet.Cells.Item($r2, 1)
+        $cellL.Value2 = (@($Title, $CustomerJob) | Where-Object { $_ }) -join " - "
+        $cellL.Font.Size = 10
+        $cellL.HorizontalAlignment = -4131
+        $cellL.VerticalAlignment = -4108
+        $cellL.ShrinkToFit = $true
+        $cellR = $sheet.Cells.Item($r2, 2)
+        $cellR.Value2 = (@($IssuedLabel, $IssuedBy) | Where-Object { $_ }) -join " "
+        $cellR.Font.Size = 10
+        $cellR.HorizontalAlignment = -4152
+        $cellR.VerticalAlignment = -4108
+        $cellR.ShrinkToFit = $true
+
+        # Line 3: comments / paint info on the left, due date on the right (blank date = slashes to fill in later)
+        $cellC = $sheet.Cells.Item($r3, 1)
+        $cellC.Value2 = $label.Notes
+        $cellC.Font.Size = 11
+        $cellC.HorizontalAlignment = -4131
+        $cellC.VerticalAlignment = -4108
+        $cellC.ShrinkToFit = $true
+        $cellD = $sheet.Cells.Item($r3, 2)
+        $cellD.Value2 = if ($label.DueDate) { "DUE $($label.DueDate)" } else { "DUE    /    /" }
+        $cellD.Font.Size = 18
+        $cellD.HorizontalAlignment = -4152
+        $cellD.VerticalAlignment = -4108
+        $cellD.ShrinkToFit = $true
+
+        $i++
+    }
+
+    $lastRow = 3 * $Labels.Count
+    $sheet.Range("D1").Value2 = "Print this tab on the Dymo (3.5 x 1.125 in address label). One label per page."
+    $sheet.Range("D1").Font.Bold = $false
+    $sheet.Range("D1").Font.Italic = $true
+
+    Set-LabelPrintSetup -Sheet $sheet -LastCol "B" -RowsPerLabel 3 -LabelCount $Labels.Count
+    return $sheet
+}
+
+# Print setup shared by the label tabs: one 3.5 x 1.125 in label per page, margins 0, fit all columns on one page.
+function Set-LabelPrintSetup {
+    param($Sheet, [string]$LastCol, [int]$RowsPerLabel, [int]$LabelCount)
+    try {
+        $ps = $Sheet.PageSetup
+        $ps.PrintArea = "`$A`$1:`$$LastCol`$$($RowsPerLabel * $LabelCount)"
+        $ps.Orientation = 2                      # landscape: the long side (3.5 in) is the width
+        $ps.LeftMargin = 0; $ps.RightMargin = 0
+        $ps.TopMargin = 0; $ps.BottomMargin = 0
+        $ps.HeaderMargin = 0; $ps.FooterMargin = 0
+        $ps.CenterHorizontally = $true
+        $ps.CenterVertically = $true
+        $Sheet.ResetAllPageBreaks()
+        for ($b = 1; $b -lt $LabelCount; $b++) {
+            [void]$Sheet.HPageBreaks.Add($Sheet.Cells.Item($RowsPerLabel * $b + 1, 1))
+        }
+        $ps.Zoom = $false                        # after ResetAllPageBreaks (it resets the scaling): fit all columns on one page
+        $ps.FitToPagesWide = 1
+        $ps.FitToPagesTall = $false
+    }
+    catch {
+        Write-Log "$($Sheet.Name) tab built, but page setup failed (is a printer installed? select the Dymo and set the page to 3.5 x 1.125 in): $($_.Exception.Message)" "Yellow"
+    }
+}
+
+# Transmittals (other than the REV itself) that hold any of the REV's assembly numbers in the given sequences.
+# Non-REV transmittals are preferred; other REVs are returned only when no non-REV one matches.
+function Get-RevisedTransmittals {
+    param($Tl, $AllTLs, [string[]]$Sequences)
+    $hits = @($AllTLs | Where-Object {
+        $other = $_
+        $other.TL -ne $Tl.TL -and @($Sequences | Where-Object { $Tl.SeqAssemblies.ContainsKey($_) -and $other.SeqAssemblies.ContainsKey($_) -and $Tl.SeqAssemblies[$_].Overlaps($other.SeqAssemblies[$_]) }).Count -gt 0
+    } | Sort-Object Number)
+    $plain = @($hits | Where-Object { -not $_.IsRev })
+    if ($plain.Count -gt 0) { return $plain }
+    return $hits
+}
+
+# "TL Labels" tab: one 3.5 x 1.125 in label per transmittal. Row 1 (33 pt): the TL big (italic R on a REV, with a small
+# right-aligned "REVISES ..."); row 2 (30 pt): its sequences big, side by side; row 3 (18 pt): each sequence's due date small.
+# Built on a 12-column grid of 21 pt so any number of sequences spreads evenly.
+function Add-TlLabelSheet {
+    param($Workbook, $TLs, $AllTLs)
+
+    $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
+    $sheet.Name = "TL Labels"
+    $sheet.Cells.NumberFormat = "@"
+    $sheet.Cells.Font.Name = "Arial"
+    $sheet.Cells.Font.Bold = $true
+    for ($c = 1; $c -le 12; $c++) {
+        $col = $sheet.Columns.Item($c)
+        $w = 21 / 5.4
+        for ($k = 0; $k -lt 8; $k++) {
+            $col.ColumnWidth = $w
+            $cur = [double]$col.Width
+            if ([Math]::Abs($cur - 21) -lt 0.4) { break }
+            $w = $w * (21 / $cur)
+        }
+    }
+
+    # Column spans (12-column grid) per sequence count; beyond 6 sequences each gets 2 columns or less and shrinks to fit
+    $spanPlans = @{ 1 = @(12); 2 = @(6, 6); 3 = @(4, 4, 4); 4 = @(3, 3, 3, 3); 5 = @(2, 2, 3, 2, 3); 6 = @(2, 2, 2, 2, 2, 2) }
+
+    $i = 0
+    foreach ($tl in $TLs) {
+        $r1 = 3 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2
+        $sheet.Rows.Item($r1).RowHeight = 33
+        $sheet.Rows.Item($r2).RowHeight = 30
+        $sheet.Rows.Item($r3).RowHeight = 18
+
+        # Row 1: the transmittal (a REV gets the left 8 columns plus a small "REVISES ..." on the right 4)
+        $revises = if ($tl.IsRev) { @(Get-RevisedTransmittals -Tl $tl -AllTLs $AllTLs -Sequences $tl.Sequences | ForEach-Object { $_.TL }) } else { @() }
+        $tlSpan = if ($revises.Count -gt 0) { 8 } else { 12 }
+        $tlCell = $sheet.Range($sheet.Cells.Item($r1, 1), $sheet.Cells.Item($r1, $tlSpan))
+        $tlCell.Merge()
+        $tlCell.Value2 = $tl.TL
+        $tlCell.Font.Size = 26
+        $tlCell.HorizontalAlignment = -4108
+        $tlCell.VerticalAlignment = -4108
+        $tlCell.ShrinkToFit = $true
+        if ($tl.IsRev) { $tlCell.Characters(3, 1).Font.Italic = $true }   # the R of TLR####
+        if ($revises.Count -gt 0) {
+            $revCell = $sheet.Range($sheet.Cells.Item($r1, 9), $sheet.Cells.Item($r1, 12))
+            $revCell.Merge()
+            $revCell.Value2 = "REVISES $($revises -join ', ')"
+            $revCell.Font.Size = 10
+            $revCell.HorizontalAlignment = -4152
+            $revCell.VerticalAlignment = -4108
+            $revCell.ShrinkToFit = $true
+        }
+
+        # Rows 2 and 3: each sequence big, its due date small underneath
+        $seqs = @($tl.Sequences)
+        $spans = if ($spanPlans.ContainsKey($seqs.Count)) { $spanPlans[$seqs.Count] } else { @(for ($n = 0; $n -lt $seqs.Count; $n++) { 12 / $seqs.Count }) }
+        $col = 1
+        for ($n = 0; $n -lt $seqs.Count; $n++) {
+            $last = [Math]::Min(12, $col + [int][Math]::Ceiling($spans[$n]) - 1)
+            $note = $tl.SeqNotes[$seqs[$n]]
+            $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tl.DueDate }
+
+            $seqCell = $sheet.Range($sheet.Cells.Item($r2, $col), $sheet.Cells.Item($r2, $last))
+            $seqCell.Merge()
+            $seqCell.Value2 = $seqs[$n]
+            $seqCell.Font.Size = 24
+            $seqCell.HorizontalAlignment = -4108
+            $seqCell.VerticalAlignment = -4108
+            $seqCell.ShrinkToFit = $true
+
+            $dueCell = $sheet.Range($sheet.Cells.Item($r3, $col), $sheet.Cells.Item($r3, $last))
+            $dueCell.Merge()
+            $dueCell.Value2 = if ($due) { "DUE $due" } else { "DUE    /    /" }
+            $dueCell.Font.Size = 10
+            $dueCell.HorizontalAlignment = -4108
+            $dueCell.VerticalAlignment = -4108
+            $dueCell.ShrinkToFit = $true
+            $col = $last + 1
+        }
+        $i++
+    }
+
+    Set-LabelPrintSetup -Sheet $sheet -LastCol "L" -RowsPerLabel 3 -LabelCount $TLs.Count
+    return $sheet
+}
+
 function Read-KssSelectionInteractive ($Entries) {
     $cursor = 0
     $offset = 0
@@ -1614,6 +1983,22 @@ else {
 Write-Log "Extracted Project: $projectName (Job $jobNumber)" "Green"
 Write-Log "Total Detail Records Parsed: $($masterData.Count)" "Cyan"
 if ($allTLs.Count -gt 0) { Write-Log "Transmittals: $($allTLs -join ', ')" "Cyan" }
+
+# Folder labels: optional Required Assm workbook (asked once, built later inside the BOM workbook)
+$requiredAssmPath = $null
+$ourJobNumber = ""
+$issuedBy = ""
+if ($modeChoice -ne "2") {
+    $requiredAssmPath = Select-RequiredAssmFile
+    if ($requiredAssmPath) {
+        $guessJob = ""
+        if ([System.IO.Path]::GetFileName($requiredAssmPath) -match '^\s*(\d{4,6})') { $guessJob = $Matches[1] }
+        $jobPrompt = if ($guessJob) { "Our job number (default: $guessJob)" } else { "Our job number (shown first on the label)" }
+        $ourJobInput = (Read-Host $jobPrompt).Trim()
+        $ourJobNumber = if ($ourJobInput) { $ourJobInput } else { $guessJob }
+        $issuedBy = (Read-Host "Initials of who is making the folders (Enter to leave blank)").Trim().ToUpper()
+    }
+}
 
 $whitelistResult = $null
 Write-Host ""
@@ -3050,6 +3435,56 @@ $dashboard.Columns.Item(20).ColumnWidth = 16
 $dashboard.Columns.Item(21).ColumnWidth = 12
 $dashboard.Columns.Item(22).ColumnWidth = 12
 $dashboard.Columns.Item(23).ColumnWidth = 16
+
+# --- TAB: FOLDER LABELS (only when a Required Assm workbook was chosen) ---
+if ($requiredAssmPath) {
+    Write-Log "Building Folder Labels tab from $([System.IO.Path]::GetFileName($requiredAssmPath))..."
+    try {
+        $labelData = @(Read-RequiredAssm -Excel $excel -Path $requiredAssmPath)
+        $allWorkbookTLs = $labelData
+        if ($allTLs.Count -gt 0) {
+            $runNumbers = @($allTLs | ForEach-Object { [int]($_ -replace '\D', '0') })
+            $skipped = @($labelData | Where-Object { $runNumbers -notcontains $_.Number } | ForEach-Object { $_.TL })
+            if ($skipped.Count -gt 0) { Write-Log "No label for $($skipped -join ', '): not in the KSS files selected for this run." "Yellow" }
+            $labelData = @($labelData | Where-Object { $runNumbers -contains $_.Number })
+            $missingLabels = @($runNumbers | Where-Object { $n = $_; -not (@($labelData | Where-Object { $_.Number -eq $n })) })
+            if ($missingLabels.Count -gt 0) { Write-Log "No Required Assm entry for TL$($missingLabels -join ', TL'); no label made for it." "Yellow" }
+        }
+        if ($labelData.Count -eq 0) {
+            Write-Log "No transmittals with assemblies found in the Required Assm workbook; skipping the Folder Labels tab." "Yellow"
+        }
+        else {
+            $tlLabelData = @($labelData | Sort-Object Number)
+            # One label per folder = one per (TL, sequence), ordered by TL number then sequence
+            $labelData = @($labelData | Sort-Object Number | ForEach-Object {
+                $tl = $_
+                foreach ($seq in $tl.Sequences) {
+                    $note = $tl.SeqNotes[$seq]
+                    $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tl.DueDate }
+                    $coat = if ($note -and $note.Coating) { $note.Coating } else { $tl.Coating }
+                    $notes = $coat
+                    if ($tl.IsRev) {
+                        # REV: name the transmittals that hold the same assembly numbers in this sequence (non-REV ones preferred)
+                        $hits = @(Get-RevisedTransmittals -Tl $tl -AllTLs $allWorkbookTLs -Sequences @($seq))
+                        if ($hits.Count -gt 0) { $notes = (@("REVISES $(($hits | ForEach-Object { $_.TL }) -join ', ')", $coat) | Where-Object { $_ }) -join " - " }
+                    }
+                    [PSCustomObject]@{ TL = $tl.TL; IsRev = $tl.IsRev; Sequence = $seq; DueDate = $due; Notes = $notes }
+                }
+            })
+            [void](Add-FolderLabelSheet -Workbook $workbook -Labels $labelData -OurJob $ourJobNumber -Title $projectName.ToUpper() -CustomerJob $jobNumber -IssuedBy $issuedBy)
+            foreach ($l in $labelData) {
+                $line1 = (@($ourJobNumber, $l.TL, $l.Sequence) | Where-Object { $_ }) -join " - "
+                Write-Log "  Label: $line1 | $($l.Notes) | $($l.DueDate)" "Cyan"
+            }
+            Write-Log "Folder Labels tab ready: $($labelData.Count) label(s). Print that tab on the Dymo (3.5 x 1.125 in)." "Green"
+            [void](Add-TlLabelSheet -Workbook $workbook -TLs $tlLabelData -AllTLs $allWorkbookTLs)
+            Write-Log "TL Labels tab ready: $($tlLabelData.Count) label(s) (one per transmittal)." "Green"
+        }
+    }
+    catch {
+        Write-Log "Could not build the Folder Labels tab: $($_.Exception.Message)" "Red"
+    }
+}
 
 # Sheet presentation setup
 $dashboard.Move($workbook.Sheets.Item(1))

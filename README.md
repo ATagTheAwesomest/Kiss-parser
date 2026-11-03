@@ -15,7 +15,7 @@ software) into the shop's working documents.
 
 | File | What it does |
 | --- | --- |
-| `tools/Parse-KSS.ps1` | The KISS engine. Reads the `.kss` files (or a soundwall post-schedule CSV) in the current folder and writes the BOM workbook, filtered `.kss` files, an optional QPR workbook, and per-TL shop scripts: `Sort-PlatesByThickness` (sorts plate DXFs into thickness folders), `Type-Quantities` and `Type-Grades` (type values into ProNest). |
+| `tools/Parse-KSS.ps1` | The KISS engine. Reads the `.kss` files (or a soundwall post-schedule CSV) in the current folder and writes the BOM workbook, filtered `.kss` files, an optional QPR workbook, a `Folder Labels` tab (Dymo 3.5 x 1.125 in, one label per transmittal and sequence) when a Required Assm workbook is present, and per-TL shop scripts: `Sort-PlatesByThickness` (sorts plate DXFs into thickness folders), `Type-Quantities` and `Type-Grades` (type values into ProNest). |
 | `tools/verify-whitelist.ps1` | Tests an assembly whitelist on its own, using the same parser as the engine. |
 
 ## Needs
@@ -39,7 +39,8 @@ Quality Process Report: each sheet is named `{job} - {TL}`, or `{job} - {TL} - {
 
 1. Copy or drop the job's `.kss` files into `jobs/` (or any folder).
 2. In that folder: `powershell -ExecutionPolicy Bypass -File <path to KISS>\tools\Parse-KSS.ps1`
-3. Answer the prompts: data source, which files and TLs, optional assembly whitelist, rev overrides,
+3. Answer the prompts: data source, which files and TLs, optional folder labels (needs a `... REQUIRED ASSM.xlsx` in the
+   folder, see [PARSING.md](docs/PARSING.md) section 6a), optional assembly whitelist, rev overrides,
    duplicates, shop script grouping, QPR. Details in [docs/PARSING.md](docs/PARSING.md).
 
 Outputs are written to the folder the script runs in. The generated `.bat` files find their DXF folder

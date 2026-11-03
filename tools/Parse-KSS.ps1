@@ -782,7 +782,7 @@ function Format-FeetInches16 ($lengthStr) {
 
 # One row per assembly: Item data for the report. Part qtys in a KISS D block are totals for the assembly qty.
 function Get-WorkOrderPages {
-    param($MasterData, $SeqNotes, [string]$DefaultNotes = "NO PAINT")
+    param($MasterData, $SeqNotes, [string]$DefaultNotes = "NO PAINT", $RevAssemblies = $null, $TlNames = $null)
 
     $rows = foreach ($g in ($MasterData | Group-Object -Property TL, Assembly)) {
         $parts = @($g.Group)
@@ -805,22 +805,26 @@ function Get-WorkOrderPages {
             WeightTotal = $wt
         }
     }
-    # One work order per sequence. An assembly in several transmittals (a REV) is listed once, from the highest TL number.
-    foreach ($g in ($rows | Group-Object -Property Sequence | Sort-Object Name)) {
-        $items = @($g.Group | Group-Object -Property Assembly | ForEach-Object {
-            $_.Group | Sort-Object @{ Expression = { [int]($_.TL -replace '\D', '0') } } | Select-Object -Last 1
-        } | Sort-Object Assembly)
-        $tls = @($items | ForEach-Object { $_.TL } | Where-Object { $_ } | Sort-Object { [int]($_ -replace '\D', '0') } -Unique)
-        $note = if ($SeqNotes) { $SeqNotes[$g.Name] } else { $null }
+    # One work order per transmittal + sequence (a folder per TL, a folder per sequence inside it). An assembly listed in a
+    # REV transmittal (Required Assm) moves off its original TL's work order and shows only on the REV.
+    $placed = foreach ($row in $rows) {
+        $own = [int]($row.TL -replace '\D', '0')
+        $tlNumber = if ($RevAssemblies -and $RevAssemblies.ContainsKey($row.Assembly)) { [int]$RevAssemblies[$row.Assembly] } else { $own }
+        $row | Add-Member -NotePropertyName TlNumber -NotePropertyValue $tlNumber -PassThru -Force
+    }
+    foreach ($g in ($placed | Group-Object -Property TlNumber, Sequence)) {
+        $first = $g.Group[0]
+        $items = @($g.Group | Group-Object -Property Assembly | ForEach-Object { $_.Group | Select-Object -Last 1 } | Sort-Object Assembly)
+        $note = if ($SeqNotes) { $SeqNotes[$first.Sequence] } else { $null }
         [PSCustomObject]@{
-            Sequence = $g.Name
-            TL = $tls -join ", "
+            Sequence = $first.Sequence
+            TL = if ($TlNames -and $TlNames.ContainsKey($first.TlNumber)) { $TlNames[$first.TlNumber] } else { "TL$($first.TlNumber)" }
+            TlNumber = $first.TlNumber
             Notes = if ($note -and $note.Coating) { $note.Coating } else { $DefaultNotes }
             Items = $items
         }
     }
 }
-
 function Add-WorkOrderSheet {
     param($Workbook, $Pages, [string]$OurJob, [string]$CustomerJob, [string]$ProjectManagers, [string]$IssuedDate, [string]$LogoBase64)
 
@@ -3848,9 +3852,15 @@ if ($modeChoice -ne "2") {
                 }
             }
         }
-        $workOrderPages = @(Get-WorkOrderPages -MasterData $masterData -SeqNotes $workOrderNotes)
+        $revAssemblies = @{}; $tlNames = @{}
+        foreach ($tlEntry in @($allWorkbookTLs | Sort-Object Number)) {
+            if (-not $tlEntry) { continue }
+            $tlNames[[int]$tlEntry.Number] = $tlEntry.TL
+            if ($tlEntry.IsRev) { foreach ($set in $tlEntry.SeqAssemblies.Values) { foreach ($asm in $set) { $revAssemblies[$asm] = [int]$tlEntry.Number } } }
+        }
+        $workOrderPages = @(Get-WorkOrderPages -MasterData $masterData -SeqNotes $workOrderNotes -RevAssemblies $revAssemblies -TlNames $tlNames | Sort-Object TlNumber, Sequence)
         [void](Add-WorkOrderSheet -Workbook $workbook -Pages $workOrderPages -OurJob $ourJobNumber -CustomerJob $jobNumber -ProjectManagers $workOrderManagers -IssuedDate $workOrderIssued -LogoBase64 $script:TerraLogoBase64)
-        Write-Log "TERRA Work Order tab ready: $($workOrderPages.Count) work order(s), one per sequence." "Green"
+        Write-Log "TERRA Work Order tab ready: $($workOrderPages.Count) work order(s), one per TL and sequence." "Green"
     }
     catch {
         Write-Log "Could not build the TERRA Work Order tab: $($_.Exception.Message)" "Red"

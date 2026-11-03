@@ -458,6 +458,50 @@ function Read-RequiredAssm {
     finally {
         $wb.Close($false)
     }
+    # Per-sequence details from the "TL Notes" tab (register keyed by 4-digit sequence). Used first; the
+    # Sheet1 rows above the TL header are only a fallback. The tab holds a formula-spilled copy of the same
+    # table next to the yellow input table, so the first non-blank value per sequence wins.
+    $seqNotes = @{}
+    $wb = $Excel.Workbooks.Open($Path, 0, $true)
+    try {
+        foreach ($ws in $wb.Worksheets) {
+            if ($ws.Name -notmatch '(?i)^\s*TL\s*Notes\s*$') { continue }
+            $last = $ws.Cells.SpecialCells(11)
+            $vals = $ws.Range($ws.Cells.Item(1, 1), $last).Value2
+            if ($vals -isnot [System.Array] -or $vals.Rank -ne 2) { break }
+            $nRows = $vals.GetLength(0)
+            $nCols = $vals.GetLength(1)
+            for ($hr = 1; $hr -le $nRows; $hr++) {
+                for ($hc = 1; $hc -le $nCols; $hc++) {
+                    if (("$($vals[$hr, $hc])").Trim() -notmatch '^(?i)sequence$') { continue }
+                    $paintCol = 0; $dueCol = 0
+                    for ($k = $hc + 1; $k -le [Math]::Min($nCols, $hc + 6); $k++) {
+                        $h = ("$($vals[$hr, $k])").Trim()
+                        if ($h -match '(?i)^paint|coating') { $paintCol = $k }
+                        elseif ($h -match '(?i)^due') { $dueCol = $k }
+                    }
+                    if ($paintCol -eq 0 -and $dueCol -eq 0) { continue }
+                    for ($r = $hr + 1; $r -le $nRows; $r++) {
+                        $seq = ("$($vals[$r, $hc])").Trim()
+                        if ($seq -notmatch '^\d{4}$') { continue }
+                        if (-not $seqNotes.ContainsKey($seq)) { $seqNotes[$seq] = @{ Coating = ""; DueDate = "" } }
+                        if ($paintCol -gt 0 -and -not $seqNotes[$seq].Coating -and $null -ne $vals[$r, $paintCol]) {
+                            $seqNotes[$seq].Coating = ("$($vals[$r, $paintCol])").Trim()
+                        }
+                        if ($dueCol -gt 0 -and -not $seqNotes[$seq].DueDate -and $null -ne $vals[$r, $dueCol]) {
+                            $d = $vals[$r, $dueCol]
+                            $seqNotes[$seq].DueDate = if ($d -is [double]) { [DateTime]::FromOADate($d).ToString('M/d/yy') } else { ("$d").Trim() }
+                        }
+                    }
+                }
+            }
+            break
+        }
+    }
+    finally {
+        $wb.Close($false)
+    }
+    foreach ($tlEntry in $result) { $tlEntry | Add-Member -NotePropertyName SeqNotes -NotePropertyValue $seqNotes }
     return @($result | Sort-Object Number)
 }
 
@@ -3284,7 +3328,10 @@ if ($requiredAssmPath) {
             $labelData = @($labelData | Sort-Object Number | ForEach-Object {
                 $tl = $_
                 foreach ($seq in $tl.Sequences) {
-                    [PSCustomObject]@{ TL = $tl.TL; IsRev = $tl.IsRev; Sequence = $seq; DueDate = $tl.DueDate; Coating = $tl.Coating }
+                    $note = $tl.SeqNotes[$seq]
+                    $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tl.DueDate }
+                    $coat = if ($note -and $note.Coating) { $note.Coating } else { $tl.Coating }
+                    [PSCustomObject]@{ TL = $tl.TL; IsRev = $tl.IsRev; Sequence = $seq; DueDate = $due; Coating = $coat }
                 }
             })
             [void](Add-FolderLabelSheet -Workbook $workbook -Labels $labelData -OurJob $ourJobNumber -Title $projectName.ToUpper())

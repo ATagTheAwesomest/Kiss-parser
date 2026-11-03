@@ -126,12 +126,14 @@ Needs a `*REQUIRED ASSM*.xlsx` in the run folder (git-ignored like every other j
 
 | Row | Used for |
 |---|---|
-| `Paint / TL Details` (above the header) | Coating text, shown at the right of line 2. Left blank = no coating. |
-| `Due Date` (above the header) | Due date, shown after the job title on line 2. Blank = left out. |
+| `Paint / TL Details` (above the header) | Fallback coating for the whole transmittal, used only when the `TL Notes` tab has none for that sequence. |
+| `Due Date` (above the header) | Fallback due date, same rule. |
 | `TL Name` (header) | Transmittal, e.g. `TL1296`. A REV is `TLR1301` and keeps the `R` on the label. Columns that are not named `TL#### / TLR####`, or that hold no assembly numbers, are ignored. |
 | Rows under the header | AFCO assembly numbers. The first 4 digits are the sequence (an `R` prefix is ignored). Each unique sequence in a column gets its own label (line 1). |
 
-The `Explanation` row is not used. The other tabs in that workbook are formulas over Sheet1 and are not read.
+**Coating and due date come from the `TL Notes` tab** ("Sequence Details Register"), which is keyed by 4-digit sequence: columns `Sequence`, `Paint / Details`, `Explanation`, `Due Date`. Each label takes its own sequence's `Paint / Details` (right of line 2) and `Due Date` (after the project name on line 2); real dates are shown as `M/d/yy`, text as typed, blank = left out. `Explanation` is not used. The tab holds the yellow input table plus a formula-spilled copy; the first non-blank value per sequence is used.
+
+The Sheet1 `Explanation` row is not used. The other tabs in that workbook are formulas over Sheet1 and are not read.
 
 **One label per TL and sequence** (one per folder), sorted by TL number, then sequence. If KSS files were selected for the run, only transmittals matching a selected file's TL number get a label (`TL1301.kss` matches `TLR1301`); skipped ones are reported in yellow.
 

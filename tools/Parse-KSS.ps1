@@ -512,9 +512,9 @@ function Read-RequiredAssm {
 # Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 40.5 + 15 + 24.75 + 0.75 (spacer so the bottom border prints) = 81 pt.
 # Margins are 0 and the page is set to fit all columns on one page, so the text stays inside the printable area.
 function Add-FolderLabelSheet {
-    param($Workbook, $Labels, [string]$OurJob, [string]$Title, [string]$CustomerJob, [string]$IssuedBy)
+    param($Workbook, $Labels)
 
-    $IssuedLabel = "IS:"   # text printed before the initials on line 2 (alone if the initials are blank)
+    # Job, title, customer job and initials come from the Settings tab (named cells Set_*)
 
     $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
     $sheet.Name = "Folder Labels"
@@ -546,16 +546,11 @@ function Add-FolderLabelSheet {
         $sheet.Rows.Item($r4).RowHeight = 0.75      # spacer: the page ends below the last border, so the bottom line is not clipped
 
         # Line 1: our job - transmittal - sequence (big)
-        $jobParts = @($OurJob, $label.TL, $label.Sequence) | Where-Object { $_ }
         $cell1 = $sheet.Range($sheet.Cells.Item($r1, 1), $sheet.Cells.Item($r1, 2))
         $cell1.Merge()
-        $line1 = ($jobParts -join " - ")
-        $cell1.Value2 = $line1
+        Set-CellFormulaText $cell1 "=TEXTJOIN("" - "",TRUE,Set_OurJob,""$($label.TL)"",""$($label.Sequence)"")"
         $cell1.Font.Size = 26
-        if ($label.IsRev) {                      # REV transmittal: the R in TLR#### is italic
-            $rPos = $line1.IndexOf($label.TL) + 3
-            $cell1.Characters($rPos, 1).Font.Italic = $true
-        }
+        if ($label.IsRev) { $cell1.Font.Italic = $true }   # a formula cell cannot italicize just the R of TLR####, so a REV label is italic throughout
         $cell1.HorizontalAlignment = -4108
         $cell1.VerticalAlignment = -4108
         $cell1.ShrinkToFit = $true
@@ -563,14 +558,14 @@ function Add-FolderLabelSheet {
 
         # Line 2 (small): project title - customer job on the left, "ISU'D: initials" on the right
         $cellL = $sheet.Cells.Item($r2, 1)
-        $cellL.Value2 = (@($Title, $CustomerJob) | Where-Object { $_ }) -join " - "
+        Set-CellFormulaText $cellL "=TEXTJOIN("" - "",TRUE,Set_Title,Set_CustomerJob)"
         $cellL.Font.Size = 10
         $cellL.HorizontalAlignment = -4131
         $cellL.VerticalAlignment = -4108
         $cellL.ShrinkToFit = $true
         Set-LabelCellBorder $cellL
         $cellR = $sheet.Cells.Item($r2, 2)
-        $cellR.Value2 = (@($IssuedLabel, $IssuedBy) | Where-Object { $_ }) -join " "
+        Set-CellFormulaText $cellR "=TRIM(Set_IssuedLabel&"" ""&Set_Initials)"
         $cellR.Font.Size = 10
         $cellR.HorizontalAlignment = -4152
         $cellR.VerticalAlignment = -4108
@@ -744,6 +739,228 @@ function Add-TlLabelSheet {
     return $sheet
 }
 
+# --- SETTINGS TAB: values the setup prompts used to bake into cells now live here as named cells (Set_*) that the labels, work orders and Statistics follow ---
+function Add-SettingsSheet {
+    param($Workbook, [string]$Title, [string]$CustomerJob, [string]$OurJob, [string]$Initials, [string]$ProjectManagers)
+
+    $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
+    $sheet.Name = "Settings"
+    $sheet.Cells.Font.Name = "Arial"
+    $sheet.Cells.Font.Size = 10
+
+    $sheet.Range("A1:C1").Merge()
+    $sheet.Cells.Item(1, 1).Value2 = "SETTINGS - change the yellow cells; labels, work orders and Statistics follow"
+    $sheet.Range("A1:C1").Font.Bold = $true
+    $sheet.Range("A1:C1").Font.Size = 13
+    $sheet.Range("A1:C1").Font.Color = Get-OleColor 255 255 255
+    $sheet.Range("A1:C1").Interior.Color = Get-OleColor 27 54 93
+    $sheet.Range("A1:C1").VerticalAlignment = -4108
+    $sheet.Rows.Item(1).RowHeight = 26
+
+    $sheet.Cells.Item(3, 1).Value2 = "Setting"
+    $sheet.Cells.Item(3, 2).Value2 = "Value"
+    $sheet.Cells.Item(3, 3).Value2 = "Used on"
+    $sheet.Range("A3:C3").Font.Bold = $true
+    $sheet.Range("A3:C3").Interior.Color = Get-OleColor 216 228 188
+
+    $issued = [double][DateTime]::Today.ToOADate()
+    # Name, label, value, number format ("@" = text), where it is used
+    $settings = @(
+        @("Set_Title", "Project title (label line 2)", $Title, "@", "Folder Labels, Statistics"),
+        @("Set_CustomerJob", "Customer job #", $CustomerJob, "@", "Folder Labels, TERRA Work Order, Statistics"),
+        @("Set_OurJob", "Our job #", $OurJob, "@", "Folder Labels (line 1), TERRA Work Order (ATF JOB / WO #)"),
+        @("Set_IssuedLabel", "Issued prefix", "IS:", "@", "Folder Labels (printed before the initials)"),
+        @("Set_Initials", "Initials (who made the folders)", $Initials, "@", "Folder Labels (line 2, right)"),
+        @("Set_ProjectManagers", "Project managers (PM box)", $ProjectManagers, "@", "TERRA Work Order"),
+        @("Set_IssuedDate", "Issued to shop date", $issued, "m/d/yy", "TERRA Work Order"),
+        @("Set_DefaultDue", "Due date text when a sequence has none", "3 WKS AFTER MATERIAL ARRIVES", "@", "TERRA Work Order"),
+        @("Set_DefaultNotes", "Default paint / notes (none listed for the sequence)", "NO PAINT", "@", "TERRA Work Order (NOTES column)"),
+        @("Set_CWI", "CWI required", "N/A", "@", "TERRA Work Order"),
+        @("Set_WarnDays", "Flag a due date as DUE SOON within (days)", 7, "0", "Statistics (schedule)")
+    )
+    $row = 4
+    foreach ($s in $settings) {
+        $sheet.Cells.Item($row, 1).Value2 = $s[1]
+        $valueCell = $sheet.Cells.Item($row, 2)
+        $valueCell.NumberFormat = $s[3]
+        $valueCell.Value2 = $s[2]
+        $valueCell.Interior.Color = Get-OleColor 255 242 204
+        $valueCell.HorizontalAlignment = -4131
+        $sheet.Cells.Item($row, 3).Value2 = $s[4]
+        $sheet.Cells.Item($row, 3).Font.Color = Get-OleColor 110 110 110
+        [void]$Workbook.Names.Add($s[0], "=Settings!`$B`$$row")
+        $row++
+    }
+    $sheet.Range("A3:C$($row - 1)").Borders.LineStyle = 1
+    $sheet.Range("A3:C$($row - 1)").Borders.Color = Get-OleColor 200 200 200
+    $sheet.Columns.Item(1).ColumnWidth = 48
+    $sheet.Columns.Item(2).ColumnWidth = 34
+    $sheet.Columns.Item(3).ColumnWidth = 58
+    $sheet.Cells.Item($row + 1, 1).Value2 = "Setup still asks for these once and fills them in here as the starting values."
+    $sheet.Cells.Item($row + 1, 1).Font.Italic = $true
+    return $sheet
+}
+
+# Writes a formula into a cell/merged range on a sheet whose cells are formatted as text (a "@" cell would show the formula as text)
+function Set-CellFormulaText ($Range, [string]$Formula, [string]$NumberFormat = "General") {
+    $Range.NumberFormat = $NumberFormat
+    $Range.Cells.Item(1, 1).Formula = $Formula
+}
+# --- STATISTICS EXTRAS: schedule, sequence and plate-vs-profile tables plus headline ratios, all live formulas on the Master BOM table ---
+# Folders = one row per (TL, sequence) from the Required Assm workbook ($Folders: TL, Sequence, DueDate); Due dates are cells you can edit.
+function Add-DashboardExtras {
+    param($Dashboard, $MasterData, $Folders)
+
+    $wt = "MasterBOMTable[Total Wt (lbs)]"
+    $qty = "MasterBOMTable[Qty]"
+    $tlCol = "MasterBOMTable[TL '#]"   # # is a special character in structured references
+    $asmCol = "MasterBOMTable[Assembly]"
+    $catCol = "MasterBOMTable[Category]"
+    $top = $Dashboard.UsedRange.Rows.Count + 3
+
+    $header = {
+        param($r, $c1, $c2, $title, $cols)
+        $Dashboard.Range($Dashboard.Cells.Item($r, $c1), $Dashboard.Cells.Item($r, $c2)).Merge()
+        $Dashboard.Cells.Item($r, $c1).Value2 = $title
+        $bar = $Dashboard.Range($Dashboard.Cells.Item($r, $c1), $Dashboard.Cells.Item($r, $c2))
+        $bar.Font.Bold = $true; $bar.Font.Size = 10; $bar.Font.Color = Get-OleColor 255 255 255
+        $bar.Interior.Color = Get-OleColor 31 78 120; $bar.HorizontalAlignment = -4108
+        for ($i = 0; $i -lt $cols.Count; $i++) { $Dashboard.Cells.Item($r + 1, $c1 + $i).Value2 = $cols[$i] }
+        $sub = $Dashboard.Range($Dashboard.Cells.Item($r + 1, $c1), $Dashboard.Cells.Item($r + 1, $c2))
+        $sub.Font.Bold = $true; $sub.Font.Size = 9; $sub.Interior.Color = Get-OleColor 216 228 188
+        $sub.Borders.LineStyle = 1; $sub.Borders.Weight = 2; $sub.Borders.Color = Get-OleColor 166 166 166
+    }
+    $grid = {
+        param($r1, $r2, $c1, $c2)
+        $g = $Dashboard.Range($Dashboard.Cells.Item($r1, $c1), $Dashboard.Cells.Item($r2, $c2))
+        $g.Borders.LineStyle = 1; $g.Borders.Weight = 2; $g.Borders.Color = Get-OleColor 220 225 230
+        $g.HorizontalAlignment = -4131
+    }
+
+    # Distinct keys from the BOM, sorted; sequence = first 4 characters of the assembly
+    $rows = @($MasterData | ForEach-Object { [PSCustomObject]@{ TL = "$($_.TL)"; Seq = if ("$($_.Assembly)".Length -ge 4) { "$($_.Assembly)".Substring(0, 4) } else { "$($_.Assembly)" } } } | Sort-Object TL, Seq -Unique)
+    $tls = @($rows | ForEach-Object { $_.TL } | Sort-Object -Unique)
+    $seqs = @($rows | ForEach-Object { $_.Seq } | Sort-Object -Unique)
+
+    # --- TL / sequence detail (J:M) ---
+    & $header $top 10 13 "TL / SEQUENCE DETAIL" @("TL #", "Sequence", "Assemblies", "Total Wt (lbs)")
+    $r = $top + 2; $detailFirst = $r
+    foreach ($k in $rows) {
+        $Dashboard.Cells.Item($r, 10).NumberFormat = "@"; $Dashboard.Cells.Item($r, 10).Value2 = $k.TL
+        $Dashboard.Cells.Item($r, 11).NumberFormat = "@"; $Dashboard.Cells.Item($r, 11).Value2 = $k.Seq
+        $Dashboard.Cells.Item($r, 12).Formula2 = "=IFERROR(ROWS(UNIQUE(FILTER($asmCol,($tlCol=J$r)*(LEFT($asmCol,4)=K$r)))),0)"
+        $Dashboard.Cells.Item($r, 13).Formula = "=SUMPRODUCT(($tlCol=J$r)*(LEFT($asmCol,4)=K$r)*$wt)"
+        $Dashboard.Cells.Item($r, 13).NumberFormat = "#,##0.00"
+        $r++
+    }
+    $detailLast = $r - 1
+    & $grid $detailFirst $detailLast 10 13
+
+    # --- sequence summary across TLs (E:H) ---
+    & $header $top 5 8 "SEQUENCE SUMMARY (ALL TLs)" @("Sequence", "Assemblies", "Part Pieces", "Total Wt (lbs)")
+    $r = $top + 2; $seqFirst = $r
+    foreach ($s in $seqs) {
+        $Dashboard.Cells.Item($r, 5).NumberFormat = "@"; $Dashboard.Cells.Item($r, 5).Value2 = $s
+        $Dashboard.Cells.Item($r, 6).Formula2 = "=IFERROR(ROWS(UNIQUE(FILTER($asmCol,LEFT($asmCol,4)=E$r))),0)"
+        $Dashboard.Cells.Item($r, 7).Formula = "=SUMPRODUCT((LEFT($asmCol,4)=E$r)*$qty)"
+        $Dashboard.Cells.Item($r, 8).Formula = "=SUMPRODUCT((LEFT($asmCol,4)=E$r)*$wt)"
+        $Dashboard.Cells.Item($r, 7).NumberFormat = "#,##0"
+        $Dashboard.Cells.Item($r, 8).NumberFormat = "#,##0.00"
+        $r++
+    }
+    $seqLast = $r - 1
+    & $grid $seqFirst $seqLast 5 8
+
+    # --- plate vs profile by TL (T:W) ---
+    & $header $top 20 23 "PLATE vs PROFILE BY TL" @("TL #", "Plate (lbs)", "Profile (lbs)", "Plate % of both")
+    $r = $top + 2; $ppFirst = $r
+    foreach ($tl in $tls) {
+        $Dashboard.Cells.Item($r, 20).NumberFormat = "@"; $Dashboard.Cells.Item($r, 20).Value2 = $tl
+        $Dashboard.Cells.Item($r, 21).Formula = "=SUMIFS($wt,$tlCol,T$r,$catCol,`"Plate`")"
+        $Dashboard.Cells.Item($r, 22).Formula = "=SUMIFS($wt,$tlCol,T$r,$catCol,`"Profile`")"
+        $Dashboard.Cells.Item($r, 23).Formula = "=IFERROR(U$r/(U$r+V$r),0)"
+        $Dashboard.Cells.Item($r, 21).NumberFormat = "#,##0"; $Dashboard.Cells.Item($r, 22).NumberFormat = "#,##0"; $Dashboard.Cells.Item($r, 23).NumberFormat = "0.0%"
+        $r++
+    }
+    $ppLast = $r - 1
+    $Dashboard.Cells.Item($r, 20).Value2 = "TOTAL"
+    $Dashboard.Cells.Item($r, 21).Formula = "=SUM(U${ppFirst}:U$ppLast)"
+    $Dashboard.Cells.Item($r, 22).Formula = "=SUM(V${ppFirst}:V$ppLast)"
+    $Dashboard.Cells.Item($r, 23).Formula = "=IFERROR(U$r/(U$r+V$r),0)"
+    $Dashboard.Cells.Item($r, 21).NumberFormat = "#,##0"; $Dashboard.Cells.Item($r, 22).NumberFormat = "#,##0"; $Dashboard.Cells.Item($r, 23).NumberFormat = "0.0%"
+    $Dashboard.Range($Dashboard.Cells.Item($r, 20), $Dashboard.Cells.Item($r, 23)).Font.Bold = $true
+    & $grid $ppFirst $r 20 23
+
+    # --- delivery schedule (O:R): one row per folder (TL + sequence) with an editable due date ---
+    $schedFirst = $null; $schedLast = $null
+    & $header $top 15 18 "FOLDER SCHEDULE (edit the due dates)" @("TL / Sequence", "Due", "Days Left", "Status")
+    $r = $top + 2; $schedFirst = $r
+    foreach ($fo in @($Folders)) {
+        if (-not $fo) { continue }
+        $Dashboard.Cells.Item($r, 15).NumberFormat = "@"; $Dashboard.Cells.Item($r, 15).Value2 = "$($fo.TL) / $($fo.Sequence)"
+        $d = [DateTime]::MinValue
+        $Dashboard.Cells.Item($r, 16).NumberFormat = "m/d/yy"
+        if ($fo.DueDate -and [DateTime]::TryParse("$($fo.DueDate)", [System.Globalization.CultureInfo]::GetCultureInfo("en-US"), [System.Globalization.DateTimeStyles]::None, [ref]$d)) { $Dashboard.Cells.Item($r, 16).Value2 = [double]$d.ToOADate() }
+        $Dashboard.Cells.Item($r, 16).Interior.Color = Get-OleColor 255 242 204
+        $Dashboard.Cells.Item($r, 17).Formula = "=IF(P$r=`"`",`"`",P$r-TODAY())"
+        $Dashboard.Cells.Item($r, 17).NumberFormat = "0"
+        $Dashboard.Cells.Item($r, 18).Formula = "=IF(P$r=`"`",`"NO DATE`",IF(P$r<TODAY(),`"OVERDUE`",IF(P$r-TODAY()<=Set_WarnDays,`"DUE SOON`",`"ON TRACK`")))"
+        $r++
+    }
+    if ($r -gt $top + 2) {
+        $schedLast = $r - 1
+        & $grid $schedFirst $schedLast 15 18
+        $status = $Dashboard.Range("R${schedFirst}:R$schedLast")
+        foreach ($rule in @(@("OVERDUE", 192, 0, 0), @("DUE SOON", 191, 120, 0), @("ON TRACK", 0, 128, 0))) {
+            $fc = $status.FormatConditions.Add(1, 3, "=`"$($rule[0])`"")
+            $fc.Font.Bold = $true
+            $fc.Font.Color = Get-OleColor $rule[1] $rule[2] $rule[3]
+        }
+    }
+    else {
+        $Dashboard.Cells.Item($r, 15).Value2 = "No Required Assm workbook this run"
+        $Dashboard.Cells.Item($r, 15).Font.Italic = $true
+    }
+
+    # --- headline ratios (A:C) ---
+    & $header $top 1 3 "HEADLINES & RATIOS" @("Metric", "Value", "Source / Scope")
+    $dRange = "J${detailFirst}:J$detailLast"; $dSeq = "K${detailFirst}:K$detailLast"; $dWt = "M${detailFirst}:M$detailLast"
+    $headlines = @(
+        @("TL + sequence combinations", "=ROWS($dRange)", "#,##0", "TL / Sequence Detail"),
+        @("Plate share of weight", "=IFERROR(SUMIFS($wt,$catCol,`"Plate`")/SUM($wt),0)", "0.0%", "Master BOM [Category]"),
+        @("Profile share of weight", "=IFERROR(SUMIFS($wt,$catCol,`"Profile`")/SUM($wt),0)", "0.0%", "Master BOM [Category]"),
+        @("Hardware share of weight", "=IFERROR(SUMIFS($wt,$catCol,`"Hardware`")/SUM($wt),0)", "0.0%", "Master BOM [Category]"),
+        @("Heaviest TL / sequence", "=IFERROR(INDEX($dRange,MATCH(MAX($dWt),$dWt,0))&`" / `"&INDEX($dSeq,MATCH(MAX($dWt),$dWt,0)),`"`")", "General", "TL / Sequence Detail"),
+        @("Heaviest TL / sequence (tons)", "=MAX($dWt)/2000", "#,##0.0", "TL / Sequence Detail"),
+        @("Average tons per TL / sequence", "=IFERROR(SUM($dWt)/ROWS($dWt)/2000,0)", "#,##0.0", "TL / Sequence Detail"),
+        @("Plate pieces", "=SUMIFS($qty,$catCol,`"Plate`")", "#,##0", "Master BOM [Category]"),
+        @("Profile pieces", "=SUMIFS($qty,$catCol,`"Profile`")", "#,##0", "Master BOM [Category]")
+    )
+    if ($schedLast) {
+        $sR = "R${schedFirst}:R$schedLast"; $sP = "P${schedFirst}:P$schedLast"; $sL = "O${schedFirst}:O$schedLast"
+        $headlines += @(
+            @("Folders (TL + sequence)", "=ROWS($sL)", "#,##0", "Folder Schedule"),
+            @("REV folders", "=COUNTIF($sL,`"TLR*`")", "#,##0", "Folder Schedule"),
+            @("Next due date", "=IFERROR(1/(1/MINIFS($sP,$sP,`">=`"&TODAY())),`"none upcoming`")", "m/d/yy", "Folder Schedule"),
+            @("Days to next due", "=IFERROR({NEXT}-TODAY(),`"-`")", "0", "Folder Schedule"),
+            @("Overdue folders", "=COUNTIF($sR,`"OVERDUE`")", "#,##0", "Folder Schedule"),
+            @("Due soon (Settings: warn days)", "=COUNTIF($sR,`"DUE SOON`")", "#,##0", "Folder Schedule"),
+            @("Folders with no date", "=COUNTIF($sR,`"NO DATE`")", "#,##0", "Folder Schedule")
+        )
+    }
+    $r = $top + 2; $hFirst = $r
+    foreach ($h in $headlines) {
+        $Dashboard.Cells.Item($r, 1).Value2 = $h[0]
+        $Dashboard.Cells.Item($r, 2).NumberFormat = $h[2]
+        $Dashboard.Cells.Item($r, 2).Formula = ($h[1] -replace '\{NEXT\}', "B$($r - 1)")
+        $Dashboard.Cells.Item($r, 3).Value2 = $h[3]
+        $r++
+    }
+    & $grid $hFirst ($r - 1) 1 3
+    $Dashboard.Range("B${hFirst}:B$($r - 1)").HorizontalAlignment = -4152
+    $Dashboard.Cells.Item($top - 1, 1).Value2 = "SCHEDULE, SEQUENCE & MATERIAL MIX (live formulas; due dates and warn days are editable cells)"
+    $Dashboard.Cells.Item($top - 1, 1).Font.Bold = $true
+}
 # --- TERRA WORK ORDER (one letter page per transmittal + sequence, laid out like the Tekla UDR_TERRA_Work_Order report) ---
 # Assembly weight comes from the KSS parts (Tekla exports carry no weights): rolled shapes by lb/ft x length, plates and bars by volume.
 function Get-KssPartWeight ($shape, $size, $lengthStr, $qty) {
@@ -848,7 +1065,7 @@ function Get-WorkOrderPages {
     }
 }
 function Add-WorkOrderSheet {
-    param($Workbook, $Pages, [string]$OurJob, [string]$CustomerJob, [string]$ProjectManagers, [string]$IssuedDate, [string]$LogoBase64)
+    param($Workbook, $Pages, [string]$LogoBase64)   # job, customer job, PMs, issued date and CWI come from the Settings tab (Set_*)
 
     $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
     $sheet.Name = "TERRA Work Order"
@@ -891,10 +1108,10 @@ function Add-WorkOrderSheet {
         & $box $rng 4
     }
     $valueCell = {
-        param($r, $c1, $c2, $text)
+        param($r, $c1, $c2, $text, $fmt = "General")
         $rng = $sheet.Range($sheet.Cells.Item($r, $c1), $sheet.Cells.Item($r, $c2))
         $rng.Merge()
-        $rng.Value2 = $text
+        if ("$text".StartsWith("=")) { Set-CellFormulaText $rng $text $fmt } else { $rng.Value2 = $text }
         $rng.HorizontalAlignment = -4108
         $rng.VerticalAlignment = -4108
         $rng.WrapText = $true
@@ -961,11 +1178,11 @@ function Add-WorkOrderSheet {
                 & $labelCell $r1 8 11 "ISSUED TO SHOP DATE"
                 & $labelCell $r1 12 15 "DATE DUE"
                 & $labelCell $r1 16 17 "CWI REQ'D"
-                & $valueCell $r2 1 4 $ProjectManagers
-                & $valueCell $r2 5 7 ((@($OurJob, $wo.Sequence) | Where-Object { $_ }) -join " / ")
-                & $valueCell $r2 8 11 $IssuedDate
+                & $valueCell $r2 1 4 "=Set_ProjectManagers"
+                & $valueCell $r2 5 7 "=TEXTJOIN("" / "",TRUE,Set_OurJob,""$($wo.Sequence)"")"
+                & $valueCell $r2 8 11 "=Set_IssuedDate" "m/d/yy"
                 & $valueCell $r2 12 15 $(if ($wo.DueDate) { $wo.DueDate } else { "3 WKS AFTER`nMATERIAL ARRIVES" })
-                & $valueCell $r2 16 17 "N/A"
+                & $valueCell $r2 16 17 "=Set_CWI"
                 & $labelCell $r3 1 3 "DWGS APPROVED"
                 & $labelCell $r3 4 6 "CUSTOMER JOB#"
                 & $labelCell $r3 7 9 "SEQUENCE"
@@ -973,7 +1190,7 @@ function Add-WorkOrderSheet {
                 & $labelCell $r3 14 16 "DATE COMPLETED"
                 & $labelCell $r3 17 17 "QC DATE"
                 & $valueCell $r4 1 3 ""
-                & $valueCell $r4 4 6 $CustomerJob
+                & $valueCell $r4 4 6 "=Set_CustomerJob"
                 & $valueCell $r4 7 9 $wo.Sequence
                 & $valueCell $r4 10 13 $wo.TL
                 & $valueCell $r4 14 16 ""
@@ -3104,6 +3321,9 @@ if ($laborData.Count -gt 0) {
 }
 
 
+# --- SETTINGS TAB: the named cells the labels, work orders and Statistics read ---
+[void](Add-SettingsSheet -Workbook $workbook -Title $projectName.ToUpper() -CustomerJob $jobNumber -OurJob $ourJobNumber -Initials $issuedBy -ProjectManagers "Tyler / Matt / Rob")
+
 # --- TAB 0: PROJECT STATISTICS (Excel formulas only) ---
 Write-Log "Building front statistics dashboard..."
 $dashboard = $workbook.Sheets.Add([Type]::Missing, $workbook.Sheets.Item($workbook.Sheets.Count))
@@ -3150,12 +3370,12 @@ $dashboard.Range("A2:W2").RowHeight = 18
 
 # Executive Information Cards (Row 4 - 5)
 $dashboard.Cells.Item(4, 1) = "PROJECT NAME"
-$dashboard.Cells.Item(5, 1) = $projectName
+$dashboard.Cells.Item(5, 1).Formula = "=Set_Title"
 $dashboard.Range("A4:B4").Merge()
 $dashboard.Range("A5:B5").Merge()
 
 $dashboard.Cells.Item(4, 3) = "JOB NUMBER"
-$dashboard.Cells.Item(5, 3) = $jobNumber
+$dashboard.Cells.Item(5, 3).Formula = "=TEXTJOIN("" / "",TRUE,Set_CustomerJob,Set_OurJob)"
 $dashboard.Range("C4:D4").Merge()
 $dashboard.Range("C5:D5").Merge()
 
@@ -3842,7 +4062,7 @@ if ($requiredAssmPath) {
                     [PSCustomObject]@{ TL = $tl.TL; IsRev = $tl.IsRev; Sequence = $seq; DueDate = $due; Notes = $notes }
                 }
             })
-            [void](Add-FolderLabelSheet -Workbook $workbook -Labels $labelData -OurJob $ourJobNumber -Title $projectName.ToUpper() -CustomerJob $jobNumber -IssuedBy $issuedBy)
+            [void](Add-FolderLabelSheet -Workbook $workbook -Labels $labelData)
             foreach ($l in $labelData) {
                 $line1 = (@($ourJobNumber, $l.TL, $l.Sequence) | Where-Object { $_ }) -join " - "
                 Write-Log "  Label: $line1 | $($l.Notes) | $($l.DueDate)" "Cyan"
@@ -3861,8 +4081,6 @@ if ($requiredAssmPath) {
 if ($modeChoice -ne "2") {
     Write-Log "Building TERRA Work Order tab..."
     try {
-        $workOrderManagers = "Tyler / Matt / Rob"
-        $workOrderIssued = (Get-Date).ToString('M/d/yy', [System.Globalization.CultureInfo]::InvariantCulture)
         # NOTES column: paint info per sequence from the Required Assm workbook (TL Notes tab), else "NO PAINT"
         $workOrderNotes = @{}
         if ($allWorkbookTLs) {
@@ -3886,7 +4104,7 @@ if ($modeChoice -ne "2") {
             if ($tlEntry.IsRev) { foreach ($set in $tlEntry.SeqAssemblies.Values) { foreach ($asm in $set) { $revAssemblies[$asm] = [int]$tlEntry.Number } } }
         }
         $workOrderPages = @(Get-WorkOrderPages -MasterData $masterData -SeqNotes $workOrderNotes -RevAssemblies $revAssemblies -TlNames $tlNames -DueDates $workOrderDue | Sort-Object TlNumber, Sequence)
-        [void](Add-WorkOrderSheet -Workbook $workbook -Pages $workOrderPages -OurJob $ourJobNumber -CustomerJob $jobNumber -ProjectManagers $workOrderManagers -IssuedDate $workOrderIssued -LogoBase64 $script:TerraLogoBase64)
+        [void](Add-WorkOrderSheet -Workbook $workbook -Pages $workOrderPages -LogoBase64 $script:TerraLogoBase64)
         Write-Log "TERRA Work Order tab ready: $($workOrderPages.Count) work order(s), one per TL and sequence." "Green"
     }
     catch {
@@ -3894,8 +4112,17 @@ if ($modeChoice -ne "2") {
     }
 }
 
+# --- STATISTICS EXTRAS (below the existing tables; schedule needs the folder rows from the Required Assm workbook) ---
+try {
+    $scheduleFolders = @($labelData | ForEach-Object { if ($_) { [PSCustomObject]@{ TL = $_.TL; Sequence = $_.Sequence; DueDate = $_.DueDate } } })
+    Add-DashboardExtras -Dashboard $dashboard -MasterData $masterData -Folders $scheduleFolders
+}
+catch {
+    Write-Log "Could not build the Statistics schedule section: $($_.Exception.Message)" "Red"
+}
 # Sheet presentation setup
 $dashboard.Move($workbook.Sheets.Item(1))
+$workbook.Sheets.Item("Settings").Move([Type]::Missing, $dashboard)   # Settings sits right after Statistics
 $dashboard.Activate()
 $excel.ActiveWindow.DisplayGridlines = $true
 $dashboard.Range("A7").Select()

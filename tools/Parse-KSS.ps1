@@ -505,10 +505,10 @@ function Read-RequiredAssm {
     return @($result | Sort-Object Number)
 }
 
-# Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 55.5 + 25.5 = 81 pt.
-# Printing is at 90% so the text stays inside the printer's hard margins; change $LabelZoom if the label clips.
+# Physical label: Dymo address label, 3.5" x 1.125" = 252 pt x 81 pt. Rows 40.5 + 15 + 25.5 = 81 pt.
+# Margins are 0 and the page is set to fit all columns on one page, so the text stays inside the printable area.
 function Add-FolderLabelSheet {
-    param($Workbook, $Labels, [string]$OurJob, [string]$Title, [int]$LabelZoom = 90)
+    param($Workbook, $Labels, [string]$OurJob, [string]$Title)
 
     $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
     $sheet.Name = "Folder Labels"
@@ -532,10 +532,11 @@ function Add-FolderLabelSheet {
     # Alignment constants: xlLeft = -4131, xlRight = -4152, xlCenter = -4108
     $i = 0
     foreach ($label in $Labels) {
-        $r1 = 2 * $i + 1; $r2 = $r1 + 1
+        $r1 = 3 * $i + 1; $r2 = $r1 + 1; $r3 = $r1 + 2
 
-        $sheet.Rows.Item($r1).RowHeight = 55.5
-        $sheet.Rows.Item($r2).RowHeight = 25.5
+        $sheet.Rows.Item($r1).RowHeight = 40.5
+        $sheet.Rows.Item($r2).RowHeight = 15
+        $sheet.Rows.Item($r3).RowHeight = 25.5
 
         # Line 1: our job - transmittal - sequence (big)
         $jobParts = @($OurJob, $label.TL, $label.Sequence) | Where-Object { $_ }
@@ -543,7 +544,7 @@ function Add-FolderLabelSheet {
         $cell1.Merge()
         $line1 = ($jobParts -join " - ")
         $cell1.Value2 = $line1
-        $cell1.Font.Size = 30
+        $cell1.Font.Size = 26
         if ($label.IsRev) {                      # REV transmittal: the R in TLR#### is italic
             $rPos = $line1.IndexOf($label.TL) + 3
             $cell1.Characters($rPos, 1).Font.Italic = $true
@@ -552,25 +553,33 @@ function Add-FolderLabelSheet {
         $cell1.VerticalAlignment = -4108
         $cell1.ShrinkToFit = $true
 
-        # Line 2 (small): job title - due date on the left, coating on the right
-        $leftParts = @($Title, $label.DueDate) | Where-Object { $_ }
+        # Line 2 (small): job title on the left, coating on the right
         $cellL = $sheet.Cells.Item($r2, 1)
-        $cellL.Value2 = ($leftParts -join " - ")
-        $cellL.Font.Size = 12
+        $cellL.Value2 = $Title
+        $cellL.Font.Size = 10
         $cellL.HorizontalAlignment = -4131
         $cellL.VerticalAlignment = -4108
         $cellL.ShrinkToFit = $true
         $cellR = $sheet.Cells.Item($r2, 2)
         $cellR.Value2 = $label.Coating
-        $cellR.Font.Size = 12
+        $cellR.Font.Size = 10
         $cellR.HorizontalAlignment = -4152
         $cellR.VerticalAlignment = -4108
         $cellR.ShrinkToFit = $true
 
+        # Line 3: due date (blank date = slashes to fill in later)
+        $cell3 = $sheet.Range($sheet.Cells.Item($r3, 1), $sheet.Cells.Item($r3, 2))
+        $cell3.Merge()
+        $cell3.Value2 = if ($label.DueDate) { "DUE $($label.DueDate)" } else { "DUE    /    /" }
+        $cell3.Font.Size = 18
+        $cell3.HorizontalAlignment = -4108
+        $cell3.VerticalAlignment = -4108
+        $cell3.ShrinkToFit = $true
+
         $i++
     }
 
-    $lastRow = 2 * $Labels.Count
+    $lastRow = 3 * $Labels.Count
     $sheet.Range("D1").Value2 = "Print this tab on the Dymo (3.5 x 1.125 in address label). One label per page."
     $sheet.Range("D1").Font.Bold = $false
     $sheet.Range("D1").Font.Italic = $true
@@ -586,9 +595,11 @@ function Add-FolderLabelSheet {
         $ps.CenterVertically = $true
         $sheet.ResetAllPageBreaks()
         for ($b = 1; $b -lt $Labels.Count; $b++) {
-            [void]$sheet.HPageBreaks.Add($sheet.Cells.Item(2 * $b + 1, 1))
+            [void]$sheet.HPageBreaks.Add($sheet.Cells.Item(3 * $b + 1, 1))
         }
-        $ps.Zoom = $LabelZoom                    # after the page breaks: ResetAllPageBreaks resets the zoom to 100
+        $ps.Zoom = $false                        # after ResetAllPageBreaks (it resets the scaling): fit all columns on one page
+        $ps.FitToPagesWide = 1
+        $ps.FitToPagesTall = $false
     }
     catch {
         Write-Log "Folder Labels tab built, but page setup failed (is a printer installed? select the Dymo and set the page to 3.5 x 1.125 in): $($_.Exception.Message)" "Yellow"

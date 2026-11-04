@@ -905,8 +905,8 @@ function Add-FolderLabelSheet {
             $w = $w * ($pts / $cur)
         }
     }
-    & $setWidth $sheet.Columns.Item(1) 132
-    & $setWidth $sheet.Columns.Item(2) 120
+    & $setWidth $sheet.Columns.Item(1) 120
+    & $setWidth $sheet.Columns.Item(2) 132
 
     # Alignment constants: xlLeft = -4131, xlRight = -4152, xlCenter = -4108
     $i = 0
@@ -938,7 +938,9 @@ function Add-FolderLabelSheet {
         $cellL.ShrinkToFit = $true
         Set-LabelCellBorder $cellL
         $cellR = $sheet.Cells.Item($r2, 2)
-        Set-CellFormulaText $cellR "=TRIM(Set_IssuedLabel&"" ""&Set_Initials)"
+        # REVISES (REV labels only) sits on this line, left of the "ISU'D: initials" text
+        $revRef = Get-SeqNoteRef "E" "`"$($label.TL)|$($label.Sequence)`""
+        Set-CellFormulaText $cellR "=TRIM(IF($revRef<>"""",""REVISES ""&$revRef&""   "","""")&TRIM(Set_IssuedLabel&"" ""&Set_Initials))"
         $cellR.Font.Size = 10
         $cellR.HorizontalAlignment = -4152
         $cellR.VerticalAlignment = -4108
@@ -948,16 +950,17 @@ function Add-FolderLabelSheet {
         # Line 3: comments / paint info on the left, due date on the right (blank date = slashes to fill in later)
         $cellC = $sheet.Cells.Item($r3, 1)
         $cellC.NumberFormat = "General"
-        $cellC.Formula = "=" + (Get-SeqNoteRef "H" "`"$($label.TL)|$($label.Sequence)`"")   # follows the Sequence Notes tab
-        $cellC.Font.Size = 11
+        $cellC.Formula = "=" + (Get-SeqNoteRef "M" "`"$($label.TL)|$($label.Sequence)`"")   # paint / exception text from the Sequence Notes tab (REVISES is on line 2)
+        $cellC.Font.Size = 10
         $cellC.HorizontalAlignment = -4131
         $cellC.VerticalAlignment = -4108
-        $cellC.ShrinkToFit = $true
+        $cellC.WrapText = $true          # long notes wrap onto a second line instead of shrinking to tiny text
+        $cellC.ShrinkToFit = $false
         Set-LabelCellBorder $cellC
         $cellD = $sheet.Cells.Item($r3, 2)
         $cellD.NumberFormat = "General"
         $cellD.Formula = "=" + (Get-SeqNoteRef "I" "`"$($label.TL)|$($label.Sequence)`"")   # "DUE m/d/yy", or slashes to fill in
-        $cellD.Font.Size = 18
+        $cellD.Font.Size = 17
         $cellD.HorizontalAlignment = -4152
         $cellD.VerticalAlignment = -4108
         $cellD.ShrinkToFit = $true
@@ -1387,7 +1390,7 @@ function Get-KssPartWeight ($shape, $size, $lengthStr, $qty) {
 # (key = "<TL>|<sequence>"); blank when there is no such row or the cell is empty. Goes through workbook names
 # (Seq_*, defined by Add-SequenceNotesSheet): a direct 'Sequence Notes'!F:F reference inside the Master BOM table was saved as a broken external link.
 function Get-SeqNoteRef ($Column, $KeyExpr) {
-    $name = @{ F = "Seq_Due"; G = "Seq_Paint"; H = "Seq_LabelNotes"; I = "Seq_LabelDue"; J = "Seq_Expl" }[$Column]
+    $name = @{ E = "Seq_Revises"; F = "Seq_Due"; G = "Seq_Paint"; H = "Seq_LabelNotes"; I = "Seq_LabelDue"; J = "Seq_Expl"; M = "Seq_LabelPaint" }[$Column]
     'IFERROR(INDEX({0},MATCH({1},Seq_Key,0))&"","")' -f $name, $KeyExpr
 }
 
@@ -1433,6 +1436,7 @@ function Add-SequenceNotesSheet {
     $data = New-Object "object[,]" ($n + 1), 14
     $headers = @("Key", "Transmittal", "Sequence", "Rev", "Revises", "Due Date", "Paint / Notes", "Label Notes", "Label Due", "Explanation")
     for ($c = 0; $c -lt $headers.Count; $c++) { $data[0, $c] = $headers[$c] }
+    $data[0, 12] = "Label Paint"
     $data[0, 13] = "Edit the yellow cells (Due Date, Paint / Notes, Explanation). Master BOM, Folder Labels, TL Labels and TERRA Work Order follow. Blank paint prints the Settings default on work orders. ASSM-specific paint / due / explanation go on the Assembly Exceptions tab."
     for ($i = 0; $i -lt $n; $i++) {
         $r = $Rows[$i]; $x = $i + 2
@@ -1443,12 +1447,13 @@ function Add-SequenceNotesSheet {
         $data[($i + 1), 4] = $r.Revises
         $data[($i + 1), 5] = $r.DueDate
         $data[($i + 1), 6] = $r.Paint
-        $data[($i + 1), 7] = "=IF(E$x<>`"`",`"REVISES `"&E$x&IF(G$x<>`"`",`" - `"&G$x,`"`"),G$x)"
+        $data[($i + 1), 7] = "=IF(E$x<>`"`",`"REVISES `"&E$x&IF(M$x<>`"`",`" - `"&M$x,`"`"),M$x)"
+        $data[($i + 1), 12] = "=G$x"       # M: the paint / exception text WITHOUT the REVISES part (the folder label shows REVISES on its own line)
         $data[($i + 1), 8] = "=IF(F$x=`"`",`"DUE    /    /`",`"DUE `"&F$x)"
         $data[($i + 1), 9] = $r.Explanation
     }
     $sheet.Range("A1").Resize($n + 1, 14).Value2 = $data
-    foreach ($nm in @(@("Seq_Key", "A"), @("Seq_Due", "F"), @("Seq_Paint", "G"), @("Seq_LabelNotes", "H"), @("Seq_LabelDue", "I"), @("Seq_Expl", "J"))) {
+    foreach ($nm in @(@("Seq_Key", "A"), @("Seq_Due", "F"), @("Seq_Paint", "G"), @("Seq_LabelNotes", "H"), @("Seq_LabelDue", "I"), @("Seq_Expl", "J"), @("Seq_Revises", "E"), @("Seq_LabelPaint", "M"))) {
         [void]$Workbook.Names.Add($nm[0], "='Sequence Notes'!`$$($nm[1]):`$$($nm[1])")
     }
     if ($n -gt 0) {
@@ -1461,6 +1466,12 @@ function Add-SequenceNotesSheet {
     $hdr.Font.Bold = $true
     $hdr.Font.Color = Get-OleColor 255 255 255
     $hdr.Interior.Color = Get-OleColor 27 54 93
+    $hdr = $sheet.Range("M1")
+    $hdr.Font.Bold = $true
+    $hdr.Font.Color = Get-OleColor 255 255 255
+    $hdr.Interior.Color = Get-OleColor 27 54 93
+    $sheet.Range("M2:M$($n + 1)").Font.Color = Get-OleColor 128 128 128
+    $sheet.Columns.Item(13).ColumnWidth = [double]22
     $sheet.Range("N1").Font.Italic = $true
     $widths = [double[]]@(16, 14, 10, 7, 22, 14, 44, 44, 16, 30)   # doubles: the COM binder caches the first ColumnWidth argument type and later double writes would fail
     for ($c = 0; $c -lt $widths.Count; $c++) { $sheet.Columns.Item($c + 1).ColumnWidth = $widths[$c] }
@@ -1579,11 +1590,13 @@ function Add-SequenceNotesExceptionColumns {
     $sheet = $Workbook.Sheets.Item("Sequence Notes")
     $last = $RowCount + 1
     if ($RowCount -lt 1) { return }
-    $f = New-Object "object[,]" $RowCount, 3
+    $f = New-Object "object[,]" $RowCount, 4
     for ($i = 0; $i -lt $RowCount; $i++) {
         $x = $i + 2
-        $base = "IF(E$x<>`"`",`"REVISES `"&E$x&IF(G$x<>`"`",`" - `"&G$x,`"`"),G$x)"
-        $f[$i, 0] = "=$base&IF(K$x>0,IF($base<>`"`",`" - `",`"`")&K$x&`" ASSM `"&IF(L$x<>`"`",L$x,`"EXCEPTION`"),`"`")"
+        # M = paint plus the exception text; H = label notes = REVISES (if any) plus M
+        $paintText = "G$x&IF(K$x>0,IF(G$x<>`"`",`" - `",`"`")&K$x&`" ASSM `"&IF(L$x<>`"`",L$x,`"EXCEPTION`"),`"`")"
+        $f[$i, 0] = "=IF(E$x<>`"`",`"REVISES `"&E$x&IF(M$x<>`"`",`" - `"&M$x,`"`"),M$x)"
+        $f[$i, 3] = "=$paintText"
         $f[$i, 1] = "=COUNTIFS(Exc_FolderKey,A$x,Exc_Status,`"Exception set`")"
         $f[$i, 2] = "=IFERROR(INDEX(Exc_Paint,MATCH(A$x,Exc_FolderKey,0))&`"`",`"`")"
     }
@@ -1594,6 +1607,7 @@ function Add-SequenceNotesExceptionColumns {
     for ($i = 0; $i -lt $RowCount; $i++) {
         $sheet.Cells.Item($i + 2, 11).Formula = $f[$i, 1]
         $sheet.Cells.Item($i + 2, 12).Formula = $f[$i, 2]
+        $sheet.Cells.Item($i + 2, 13).Formula = $f[$i, 3]
     }
     $hdr = $sheet.Range("K1:L1")
     $hdr.Font.Bold = $true
@@ -6043,6 +6057,7 @@ function Add-QualityProcessSheets {
         [bool]$ReuseFirstSheet = $false,
         [bool]$Linked = $false,
         [string]$CustomerJob = "",
+        [string]$OurJob = "",
         [bool]$HasSequenceNotes = $false
     )
     $wb = $Workbook
@@ -6187,10 +6202,11 @@ function Add-QualityProcessSheets {
         $jnRange = $ws.Range($ws.Cells.Item(1,14), $ws.Cells.Item(1,16))
         $jnRange.Merge()
         $ws.Cells.Item(1,14).Value2    = $jobLabel   # mirrors the sheet name (Excel cuts sheet names at 31 characters, this cell does not)
-        if ($Linked -and $CustomerJob -and $QprJobNumber -eq $CustomerJob) {
-            # Job name left at the default: follow Settings (Set_CustomerJob)
+        if ($Linked -and (($OurJob -and $QprJobNumber -eq $OurJob) -or ($CustomerJob -and $QprJobNumber -eq $CustomerJob))) {
+            # Job name left at the default: follow Settings (our job #, else the customer job #)
+            $jobNameRef = if ($OurJob -and $QprJobNumber -eq $OurJob) { "Set_OurJob" } else { "Set_CustomerJob" }
             $tlText = if ($GroupBy -eq "Sequence") { $seqTl } else { $(if ($grp.Name) { $grp.Name } else { "(No TL)" }) }
-            $jobParts = @("Set_CustomerJob", """$tlText""")
+            $jobParts = @($jobNameRef, """$tlText""")
             if ($GroupBy -eq "Sequence") { $jobParts += """$seqNum""" }
             $ws.Cells.Item(1,14).Formula = "=TEXTJOIN("" - "",TRUE," + ($jobParts -join ",") + ")"
         }
@@ -6423,9 +6439,16 @@ Write-Host ""
 $qprChoice = Read-Host "Generate Quality Process Report (QPR)? [Y]es / [N]o (default: No)"
 if ($qprChoice -match '^(y|yes)$') {
     Write-Host ""
-    Write-Host "  Job name is the sheet prefix and the Job: box, e.g. '12-345' -> '12-345 - TL1282'"
-    $qprJobInput = Read-Host "Job name (default: $jobNumber)"
-    $qprJobNumber = if ($qprJobInput) { $qprJobInput } else { $jobNumber }
+    if ($ourJobNumber) {
+        # Already asked once for the labels / work orders: the QPR uses the same job number (sheet prefix and the Job: box)
+        $qprJobNumber = $ourJobNumber
+        Write-Host "  QPR job name: $qprJobNumber  (your job number from above, e.g. '$qprJobNumber - TL1282')"
+    }
+    else {
+        Write-Host "  Job name is the sheet prefix and the Job: box, e.g. '12-345' -> '12-345 - TL1282'"
+        $qprJobInput = Read-Host "Job name (default: $jobNumber)"
+        $qprJobNumber = if ($qprJobInput) { $qprJobInput } else { $jobNumber }
+    }
 
     Write-Host ""
     Write-Host "  [T] TL (default): one sheet per transmittal     $qprJobNumber - TL1282 | $qprJobNumber - TL1296"
@@ -6500,7 +6523,7 @@ if ($modeChoice -ne "2") {
 if ($qprChoice -match '^(y|yes)$') {
     Write-Log "Building QPR tab(s) in the BOM workbook..."
     try {
-        $qprTabs = @(Add-QualityProcessSheets -Workbook $workbook -MasterData $masterData -QprJobNumber $qprJobNumber -GroupBy $qprGroupBy -Linked $true -CustomerJob $jobNumber -HasSequenceNotes ($modeChoice -ne "2"))[-1]
+        $qprTabs = @(Add-QualityProcessSheets -Workbook $workbook -MasterData $masterData -QprJobNumber $qprJobNumber -GroupBy $qprGroupBy -Linked $true -CustomerJob $jobNumber -OurJob $ourJobNumber -HasSequenceNotes ($modeChoice -ne "2"))[-1]
         Write-Log "QPR tab(s) ready: $qprTabs ($qprGroupBy)." "Green"
     }
     catch {

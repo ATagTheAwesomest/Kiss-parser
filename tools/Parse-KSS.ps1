@@ -976,7 +976,7 @@ function Add-SettingsSheet {
         @("Set_ProjectManagers", "Project managers (PM box)", $ProjectManagers, "@", "TERRA Work Order"),
         @("Set_IssuedDate", "Issued to shop date", $issued, "m/d/yy", "TERRA Work Order"),
         @("Set_DefaultDue", "Due date text when a sequence has none", "3 WKS AFTER MATERIAL ARRIVES", "@", "TERRA Work Order"),
-        @("Set_DefaultNotes", "Default paint / notes (none listed for the sequence)", "NO PAINT", "@", "TERRA Work Order (NOTES column)"),
+        @("Set_DefaultNotes", "Default paint / notes (none listed for the sequence)", "-", "@", "TERRA Work Order (NOTES column)"),
         @("Set_CWI", "CWI required", "N/A", "@", "TERRA Work Order"),
         @("Set_WarnDays", "Flag a due date as DUE SOON within (days)", 7, "0", "Statistics (schedule)")
     )
@@ -1231,7 +1231,7 @@ function Get-ExcRef ($Column, $KeyExpr) {
 function Get-WorkOrderNoteFormula ($Tl, $Sequence, $Assembly) {
     $key = "`"$Tl|$Sequence`""
     $paintRef = Get-SeqNoteRef "G" $key
-    $base = "IF($paintRef=`"`",IFERROR(Set_DefaultNotes,`"NO PAINT`"),$paintRef)"
+    $base = "IF($paintRef=`"`",IFERROR(Set_DefaultNotes,`"-`"),$paintRef)"
     $digits = "$Assembly" -replace '\D', ''
     if (-not $script:AsmExceptions -or -not $script:AsmExceptions.ContainsKey($digits)) { return "=$base" }
     $a = "`"$digits`""

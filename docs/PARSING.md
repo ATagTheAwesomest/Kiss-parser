@@ -69,10 +69,9 @@ A `D` line must have at least 10 comma-separated fields to be accepted. Fields a
 5. **Assembly whitelist (optional):** limits the run to listed assemblies (section 5).
 6. **REV override (only if the whitelist has `R` entries):** replace older TL versions of an assembly.
 7. **Duplicate handling (only if more than one file):** `M`erge identical part marks across files into one row (default), or `S`eparate to keep each file's rows apart by TL. Merging warns when the same mark has a different shape/size/grade/length in different files.
-8. **Shop script style (only if more than one file):** `C`ombined (one set for all TLs, default) or `S`eparate per TL.
-9. The filtered KSS is written, Excel is launched and the tabs are built, and the workbook is saved.
-10. Shop scripts are generated.
-11. Optional: Quality Process Report, grouped by TL (default) or by sequence (first 4 digits of the assembly), with a job name prefix for the sheet names. Sheet names (and the Job: box on each sheet) read `{job} - {TL}`, or `{job} - {TL} - {sequence}` when grouped by sequence. The QPR questions are asked before the BOM workbook is built: answering Yes adds the QPR sheets as tabs at the end of the master BOM workbook (same sheet layout and names) and also saves the separate QPR workbook as before. In the master workbook the Job: box follows `Set_CustomerJob` on the Settings tab (when the job name was left at the default), and on sequence-grouped sheets the line under the title shows the Due date and Paint / REVISES note read live from the Sequence Notes tab, so edit them there.
+8. The filtered KSS is written, Excel is launched and the tabs are built, and the workbook is saved.
+9. Shop scripts are generated: one select-aware set for the whole run (no questions at parse time).
+10. Optional: Quality Process Report, grouped by TL (default) or by sequence (first 4 digits of the assembly), with a job name prefix for the sheet names. Sheet names (and the Job: box on each sheet) read `{job} - {TL}`, or `{job} - {TL} - {sequence}` when grouped by sequence. The QPR questions are asked before the BOM workbook is built: answering Yes adds the QPR sheets as tabs at the end of the master BOM workbook (same sheet layout and names) and also saves the separate QPR workbook as before. In the master workbook the Job: box follows `Set_CustomerJob` on the Settings tab (when the job name was left at the default), and on sequence-grouped sheets the line under the title shows the Due date and Paint / REVISES note read live from the Sequence Notes tab, so edit them there.
 
 ## 4. Parsing logic details
 
@@ -114,9 +113,15 @@ REV override keeps the newest TL (highest number in the file name) for each asse
 **Filtered KSS:** `... - Filtered Assemblies.kss`, rebuilt from the kept data. Sorted by assembly. If an assembly appears in several files, only the first selected file's version is used. The script then re-reads it with its integrity check (`Test-KissAssemblyIntegrity`): every `D` block must have 12+ fields and a numeric qty, each assembly must end with a matching `S` line, the `S` qty must match the main-part qty, and only `KISS/H/D/S/A/*/END` record types are allowed. A failed check deletes the file and stops the script.
 
 **Shop scripts (only generated if the selection has plates):**
-- `Sort-PlatesByThickness - <label>.bat`: moves each `<partmark>.dxf` into a folder named by decimal thickness. It looks in a `dxf\` subfolder if one exists, otherwise the batch file's own folder. Reports moved and missing counts.
-- `Type-Quantities - <label>.bat` and `Type-Grades - <label>.bat`: after a 5-second countdown, type each plate's total qty or grade into the active window (ProNest) with SendKeys, pressing Down after each. Rows are sorted by part mark (A-Z). The operator must click the first cell first.
-- `Master-ShopScripts - <TLs>.bat`: `Write-MasterScript` exists but is **never called** (it appears only as a definition), and the script ends by logging "Generated shop scripts without a master launcher." So no master menu is generated today.
+One set of three scripts for the whole run (no combined / separate question; the old per-file mode and the unused master launcher are gone). `<label>` is the TL list. The data of every plate is embedded with its transmittal + sequence, and each script **asks at runtime which transmittals / sequences are being nested now** before it does anything.
+
+- **Selection key:** transmittal + sequence. The transmittal is the one the part is placed under in the Master BOM, labels and work orders (a REV assembly counts under its own TLR); the sequence is the first 4 characters of the assembly. Each key is listed with its plate-mark count and plate quantity.
+- **Answering:** numbers from the list, a TL name (all its sequences), a sequence (in all TLs) or `A` (all), separated by spaces or commas. The answer is saved in `Shop-Selection - <label>.txt` next to the scripts; Enter at the prompt reuses it. After a summary (plate marks and plate quantity selected) Enter continues and `R` picks again.
+- A plate mark is **in** the selection if it occurs in at least one selected key. Its quantity is the sum over the selected keys only, so a mark with 50 in TL1282 and 100 in TL1296 types 50 when only TL1282 is selected, 100 for TL1296, 150 for both. Marks in no selected key are skipped (not moved, not typed).
+- `Sort-PlatesByThickness - <label>.bat`: moves each selected `<partmark>.dxf` into a folder named by decimal thickness. It looks in a `dxf\` subfolder if one exists, otherwise the batch file's own folder. Reports moved, missing and left-alone counts.
+- `Type-Quantities - <label>.bat` and `Type-Grades - <label>.bat`: after a 5-second countdown, type each selected plate's quantity (selected keys only) or grade into the active window (ProNest) with SendKeys, pressing Down after each. Rows are sorted by part mark (A-Z). The operator must click the first cell first. Each typed line also prints where the quantity came from, e.g. `TL1282/5203:50 TL1296/5131:100`.
+- If one mark has different sizes or grades in different transmittals, the generator warns and uses the first for thickness and grade.
+- Menus use ANSI colors (Windows 10 or newer console).
 
 ## 6a. Folder labels (Required Assm workbook)
 

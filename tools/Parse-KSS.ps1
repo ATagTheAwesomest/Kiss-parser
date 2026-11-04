@@ -3820,8 +3820,8 @@ function Write-ShopScripts ($PlateRows, $ProjectName, $JobNumber, $Label) {
     $plates = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($g in ($PlateRows | Group-Object Mark | Sort-Object Name)) {
         $first = $g.Group[0]
-        $grades = @($g.Group | ForEach-Object { "$($_.Grade)" } | Select-Object -Unique)
-        $sizes = @($g.Group | ForEach-Object { "$($_.Size)" } | Select-Object -Unique)
+        $grades = @($g.Group | ForEach-Object { "$($_.Grade)".Trim() } | Sort-Object -Unique)
+        $sizes = @($g.Group | ForEach-Object { "$($_.Size)".Trim() } | Sort-Object -Unique)
         if ($grades.Count -gt 1 -or $sizes.Count -gt 1) {
             Write-Log "WARNING: plate $($first.Mark) has different sizes/grades in different transmittals ($($sizes -join ' / ') ; $($grades -join ' / ')); the first one is used for thickness and grade." "Yellow"
         }
@@ -4583,7 +4583,7 @@ if ($sourceNames.Count -gt 1) {
     if ($dupChoice -match '^\s*s') { $mergeDuplicates = $false }
 
     if ($mergeDuplicates) {
-        $conflicts = @($sharedMarks | Where-Object { @($_.Group | ForEach-Object { "$($_.Shape)|$($_.Size)|$($_.Grade)|$($_.Length)" } | Select-Object -Unique).Count -gt 1 })
+        $conflicts = @($sharedMarks | Where-Object { @($_.Group | ForEach-Object { "$($_.Shape)|$($_.Size)|$($_.Grade)|$($_.Length)".ToLowerInvariant() } | Select-Object -Unique).Count -gt 1 })
         if ($conflicts.Count -gt 0) {
             $sample = ($conflicts | Select-Object -First 5 | ForEach-Object { $_.Name }) -join ', '
             Write-Log "WARNING: $($conflicts.Count) part mark(s) have different size/grade/length in different files but will be merged (e.g. $sample). Rerun with [S]eparate to keep them apart." "Yellow"
@@ -5128,7 +5128,7 @@ foreach ($g in $groupedAssms) {
     if ($sourceFiles.Count -gt 1) {
         $partMarkVarianceGroups = @($g.Group | Group-Object -Property PartMark | Where-Object {
             $markFiles = @($_.Group | ForEach-Object { $_.SourceFile } | Select-Object -Unique)
-            $markFiles.Count -gt 1 -and (@($_.Group | ForEach-Object { "$($_.Shape)|$($_.Size)|$($_.Grade)|$($_.Length)|$($_.Description)|$($_.Qty)" } | Select-Object -Unique).Count -gt 1)
+            $markFiles.Count -gt 1 -and (@($_.Group | ForEach-Object { "$($_.Shape)|$($_.Size)|$($_.Grade)|$($_.Length)|$($_.Description)|$($_.Qty)".ToLowerInvariant() } | Select-Object -Unique).Count -gt 1)
         })
         $hasVariance = ($partMarkVarianceGroups.Count -gt 0)
 

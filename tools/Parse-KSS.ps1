@@ -777,7 +777,7 @@ function Add-SettingsSheet {
         @("Set_ProjectManagers", "Project managers (PM box)", $ProjectManagers, "@", "TERRA Work Order"),
         @("Set_IssuedDate", "Issued to shop date", $issued, "m/d/yy", "TERRA Work Order"),
         @("Set_DefaultDue", "Due date text when a sequence has none", "3 WKS AFTER MATERIAL ARRIVES", "@", "TERRA Work Order"),
-        @("Set_DefaultNotes", "Default paint / notes (none listed for the sequence)", "NO PAINT", "@", "TERRA Work Order (NOTES column)"),
+        @("Set_DefaultNotes", "Default paint / notes (none listed for the sequence)", "-", "@", "TERRA Work Order (NOTES column)"),
         @("Set_CWI", "CWI required", "N/A", "@", "TERRA Work Order"),
         @("Set_WarnDays", "Flag a due date as DUE SOON within (days)", 7, "0", "Statistics (schedule)")
     )
@@ -1311,7 +1311,7 @@ function Add-WorkOrderSheet {
                 $sheet.Cells.Item($r, 13).NumberFormat = "#,##0"; $sheet.Cells.Item($r, 13).Formula = "=O$r/B$r"
                 $sheet.Cells.Item($r, 17).NumberFormat = "General"
                 $paintRef = Get-SeqNoteRef "G" "`"$($wo.TL)|$($wo.Sequence)`""
-                $sheet.Cells.Item($r, 17).Formula = "=IF($paintRef=`"`",IFERROR(Set_DefaultNotes,`"NO PAINT`"),$paintRef)"   # paint/notes live on the Sequence Notes tab
+                $sheet.Cells.Item($r, 17).Formula = "=IF($paintRef=`"`",IFERROR(Set_DefaultNotes,`"-`"),$paintRef)"   # paint/notes live on the Sequence Notes tab
                 $sheet.Cells.Item($r, 17).WrapText = $true
                 if ($itemNo % 2 -eq 0) {
                     $line = $sheet.Range($sheet.Cells.Item($r, 1), $sheet.Cells.Item($r, 17))

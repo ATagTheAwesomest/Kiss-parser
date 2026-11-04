@@ -137,6 +137,10 @@ When a Required Assm workbook is picked, the "Assembly filter" step is automatic
 5. TL Notes (paint, explanation, due date per sequence) and the Exceptions tab are read from the same workbook and feed the Master BOM, Sequence Notes, Assembly Exceptions, work orders and labels as in sections 6a to 6b.
 6. If none of the selected TLs is in the workbook, KISS says so and falls back to the manual assembly list question.
 
+A REV assembly keeps only the rows from the newest file that holds it; every other assembly keeps all of its rows. (An earlier version kept just one row per assembly whenever a REV was present; fixed.)
+
+If a selected TL is missing from the workbook, KISS also checks whether an unselected workbook TL holds most of that file's assemblies and says so (usually a typo in the TL name on Sheet1).
+
 To run without the workbook filter, choose `0` (skip) at the workbook question.
 
 ## 6a. Folder labels (Required Assm workbook)

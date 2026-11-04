@@ -3,12 +3,16 @@
 Tools for turning KISS files (`.kss`, the steel detailing export from Tekla Structures and other detailing
 software) into the shop's working documents.
 
+> **First time here? Start with [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)**, then double-click `Start-KISS.bat`.
+> KISS checks the PC for what it needs each time it starts (Excel is the only requirement) and explains anything missing.
+
 ## Layout
 
 | Folder | What lives there |
 | --- | --- |
+| `Start-KISS.bat` | Double-click to run. Opens in `jobs/` (or drag a job folder onto it). |
 | `tools/` | The programs. Nothing job-specific. |
-| `docs/` | How the engine works. Start with [PARSING.md](docs/PARSING.md). |
+| `docs/` | How the engine works. Start with [PARSING.md](docs/PARSING.md). New here? [GETTING-STARTED.md](docs/GETTING-STARTED.md). |
 | `jobs/` | Local only, git-ignored. The junk drawer for every job's `.kss`, BOM and QPR workbooks, zips, generated shop `.bat` scripts and `assemblies.txt`. Safe to dump files here. |
 
 ## Tools
@@ -20,7 +24,8 @@ software) into the shop's working documents.
 
 ## Needs
 
-- Windows PowerShell 5.1 and Microsoft Excel (the engine drives Excel to build the workbooks).
+- Windows PowerShell 5.1 (built into Windows) and the Microsoft Excel desktop app (the engine drives Excel to build the workbooks).
+- Nothing to install otherwise. At start the script checks the PC, unblocks its own files if Windows marked them as downloaded, confirms it can save in the folder and that Excel starts, and stops with plain instructions if not. It never changes PowerShell's execution policy; `Start-KISS.bat` allows the script for that one window only.
 
 ## Options
 
@@ -38,7 +43,7 @@ Quality Process Report: each sheet is named `{job} - {TL}`, or `{job} - {TL} - {
 ## Run
 
 1. Copy or drop the job's `.kss` files into `jobs/` (or any folder).
-2. In that folder: `powershell -ExecutionPolicy Bypass -File <path to KISS>\tools\Parse-KSS.ps1`
+2. Double-click `Start-KISS.bat` (runs in `jobs/`), or drag the job's folder onto it. By hand: in that folder, `powershell -ExecutionPolicy Bypass -File <path to KISS>\tools\Parse-KSS.ps1`
 3. Answer the prompts: data source, which files and TLs, optional folder labels (needs a `... REQUIRED ASSM.xlsx` in the
    folder, see [PARSING.md](docs/PARSING.md) section 6a), optional assembly whitelist, rev overrides,
    duplicates, shop script grouping, QPR. Details in [docs/PARSING.md](docs/PARSING.md).

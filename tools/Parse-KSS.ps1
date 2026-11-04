@@ -16,6 +16,19 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Any unexpected error ends up here: one plain message instead of a red wall of text, and a hidden Excel is not left running.
+trap {
+    Microsoft.PowerShell.Utility\Write-Host ""
+    Microsoft.PowerShell.Utility\Write-Host "  Something went wrong and the run stopped." -ForegroundColor Red
+    Microsoft.PowerShell.Utility\Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+    Microsoft.PowerShell.Utility\Write-Host "  (script line $($_.InvocationInfo.ScriptLineNumber))" -ForegroundColor DarkGray
+    Microsoft.PowerShell.Utility\Write-Host "  Your .kss files were not changed. Take a screenshot of this window and send it to Andrew." -ForegroundColor Yellow
+    foreach ($xl in @($excel, $xlApp)) { if ($xl) { try { $xl.DisplayAlerts = $false; $xl.Quit() } catch { } } }
+    Microsoft.PowerShell.Utility\Write-Host ""
+    Microsoft.PowerShell.Utility\Read-Host "  Press Enter to close" | Out-Null
+    exit 1
+}
+
 # --- COLORED CONSOLE OUTPUT ---
 # Menus and prompts are colored so a new operator can scan them: cyan frames, yellow titles,
 # green [X] choices and prompts, gray examples. Calls that pass their own color are left alone.
@@ -73,6 +86,92 @@ function Read-Host {
     param([Parameter(Position = 0)][string]$Prompt)
     if ($Prompt) { Microsoft.PowerShell.Utility\Write-Host "${Prompt}: " -ForegroundColor Green -NoNewline }
     Microsoft.PowerShell.Utility\Read-Host
+}
+
+# --- SCREEN HELPERS ---
+$script:OutputFiles = [System.Collections.Generic.List[string]]::new()
+function Add-OutputFile ([string]$Path) {
+    if ($Path -and -not $script:OutputFiles.Contains($Path)) { $script:OutputFiles.Add($Path) }
+}
+
+function Write-Section ([string]$Title) {
+    Write-Host ""
+    Write-Host ("=" * 56)
+    Write-Host "  $Title"
+    Write-Host ("=" * 56)
+}
+
+# --- FIRST-RUN / EVERY-RUN CHECK ---
+# Looks at what the script needs and fixes what it can by itself (unblocking downloaded files, folder write test).
+# Excel cannot be installed from here, so that case stops with plain instructions instead of a stack trace.
+function Test-KissEnvironment {
+    $problems = [System.Collections.Generic.List[string]]::new()
+    Write-Section "KISS - checking this computer"
+
+    # Windows + PowerShell
+    if ($env:OS -ne 'Windows_NT') { $problems.Add("This tool only runs on Windows (it drives Microsoft Excel).") }
+    $psv = $PSVersionTable.PSVersion
+    if ($psv.Major -lt 5 -or ($psv.Major -eq 5 -and $psv.Minor -lt 1)) {
+        $problems.Add("Windows PowerShell 5.1 or newer is needed (this is $psv). Run Windows Update, then try again.")
+    }
+    else { Write-Host "  [OK] PowerShell $psv" }
+
+    # Script permission: Start-KISS.bat runs this for this window only; nothing on the PC is changed
+    Write-Host "  [OK] Script permission: $(Get-ExecutionPolicy) (no change made to the PC)"
+
+    # Files downloaded from the internet or a zip are 'blocked' by Windows; unblock the tools quietly
+    $toolsDir = $PSScriptRoot
+    if ($toolsDir) {
+        $unblocked = 0
+        foreach ($f in @(Get-ChildItem -LiteralPath $toolsDir -Filter *.ps1 -File -ErrorAction SilentlyContinue)) {
+            if (Get-Item -LiteralPath $f.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
+                try { Unblock-File -LiteralPath $f.FullName -ErrorAction Stop; $unblocked++ } catch { }
+            }
+        }
+        if ($unblocked -gt 0) { Write-Host "  [OK] Unblocked $unblocked downloaded script file(s)" }
+    }
+
+    # Can we write the results here?
+    $here = (Get-Location).Path
+    $probe = Join-Path $here ".kiss-write-test.tmp"
+    try {
+        [System.IO.File]::WriteAllText($probe, "x")
+        Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+        Write-Host "  [OK] Can save files in: $here"
+    }
+    catch { $problems.Add("KISS cannot save files in this folder: $here`n       Run it from a normal folder (for example the jobs folder), not from Program Files or a read-only drive.") }
+
+    # Excel (the engine builds every workbook through Excel)
+    $xlType = $null
+    try { $xlType = [type]::GetTypeFromProgID('Excel.Application') } catch { }
+    if (-not $xlType) {
+        $problems.Add("Microsoft Excel (the desktop app) was not found. Install Microsoft 365 / Office with Excel, sign in once, then run KISS again. Excel on the web or the Microsoft Store 'Excel' viewer will not work.")
+    }
+    else {
+        $xl = $null
+        try {
+            $xl = New-Object -ComObject Excel.Application
+            Write-Host "  [OK] Microsoft Excel $($xl.Version)"
+        }
+        catch { $problems.Add("Excel is installed but would not start ($($_.Exception.Message)).`n       Open Excel once by hand, sign in or accept the license prompt, close it, then run KISS again.") }
+        finally {
+            if ($xl) {
+                try { $xl.Quit() } catch { }
+                try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($xl) | Out-Null } catch { }
+            }
+        }
+    }
+
+    if ($problems.Count -gt 0) {
+        Write-Host ""
+        foreach ($p in $problems) { Write-Host "  [X] $p" -ForegroundColor Red }
+        Write-Host ""
+        Write-Host "  Fix the above and run KISS again. Nothing else needs to be installed." -ForegroundColor Yellow
+        Microsoft.PowerShell.Utility\Read-Host "  Press Enter to close" | Out-Null
+        exit 1
+    }
+    Write-Host ""
+    Write-Host "  Everything KISS needs is in place. No extra modules or installs are required." -ForegroundColor Green
 }
 
 # --- HELPER FUNCTIONS ---
@@ -364,15 +463,12 @@ function Select-RequiredAssmFile {
         Sort-Object Name)
     if ($files.Count -eq 0) { return $null }
 
-    Write-Host ""
-    Write-Host "========================================================"
-    Write-Host "  FOLDER LABELS (Required Assm workbook)"
-    Write-Host "========================================================"
+    Write-Section "Folder labels (Required Assm workbook)"
     if ($files.Count -eq 1) {
         Write-Host "Files: $($files[0].Name)"
         Write-Host ""
-        Write-Host "  [Y]es (default): add a 'Folder Labels' tab to the BOM, one 3.5x1.125 label per transmittal and sequence"
-        Write-Host "  [N]o: skip the labels"
+        Write-Host "  [Y] Yes (default): add a 'Folder Labels' tab, one 3.5x1.125 label per transmittal and sequence"
+        Write-Host "  [N] No: skip the labels"
         $choice = Read-Host "Build folder labels from this file? [Y]es / [N]o (default: Yes)"
         if ($choice -match '^(n|no)$') { return $null }
         return $files[0].FullName
@@ -1846,6 +1942,7 @@ function Save-BatFile ($Name, $Lines) {
     $path = Join-Path (Get-Location).Path $Name
     [System.IO.File]::WriteAllLines($path, $Lines, [System.Text.Encoding]::ASCII)
     Write-Log "Successfully generated: $Name" "Green"
+    Add-OutputFile $path
 }
 
 function New-TypeMacroLines ($Title, $Noun, $ValueLabel, $Rows, $ProjectName, $JobNumber, $TL) {
@@ -2408,36 +2505,22 @@ function Write-FilteredAssemblyKssFile ($MasterData, $AssemblyDrawings, $Project
 }
 
 
-# 1. SELECT DATA SOURCE
-Write-Log "Initializing KSS Nesting, Hardware & Shop Management Engine..." "Yellow"
+# 1. CHECK THE COMPUTER, THEN SELECT DATA SOURCE
+try { Clear-Host } catch { }
 Write-Host ""
-Write-Host "========================================================"
-Write-Host "  ASSEMBLY LIST FORMAT (when using whitelist)"
-Write-Host "========================================================"
-Write-Host "  Simple list (comma/space/newline separated):"
-Write-Host "    51328511"
-Write-Host "    51318512"
+Write-Host ("=" * 56)
+Write-Host "  KISS  -  KSS Nesting, Hardware & Shop Management"
+Write-Host ("=" * 56)
+Write-Host "  Working folder: $((Get-Location).Path)" -ForegroundColor DarkGray
+Write-Host "  Answers in [brackets]; press Enter to take the (default)." -ForegroundColor DarkGray
+Test-KissEnvironment
+
+Write-Section "Data source"
+Write-Host " [1] KSS files - the .kss export from Tekla (default)"
+Write-Host " [2] Soundwall CSV - post schedule import"
 Write-Host ""
-Write-Host "  WITH TL PREFIXES (for TL-specific filtering):"
-Write-Host "    TL1296  51328511 51318512 51316500"
-Write-Host "    TL1313  51338507 51338511"
-Write-Host ""
-Write-Host "  WITH REV MARKER (R prefix = override older TL versions):"
-Write-Host "    R51328511  <- REV: will replace this part from earlier TLs"
-Write-Host "    R51318512  <- REV: will replace this part from earlier TLs"
-Write-Host ""
-Write-Host "  WITH MANUAL TL ORDERING (number prefix for sort order):"
-Write-Host "    1_TL1301   <- Process TL1301 FIRST"
-Write-Host "    2_TL1282   <- Process TL1282 SECOND"
-Write-Host "    3_TL1296   <- Process TL1296 THIRD"
-Write-Host ""
-Write-Host "========================================================"
-Write-Host "  Select Data Source"
-Write-Host "========================================================"
-Write-Host " [1] KSS Files (.kss nesting/detail export)"
-Write-Host " [2] Soundwall CSV (post schedule import)"
-Write-Host ""
-$modeChoice = Read-Host "Enter selection (1 or 2)"
+$modeChoice = (Read-Host "Choose 1 or 2 (default: 1)").Trim()
+if ($modeChoice -ne "2") { $modeChoice = "1" }
 
 # 2. PARSE DATA & METADATA
 $masterData = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -2499,7 +2582,7 @@ else {
     # --- KSS FILE MODE ---
     $kssFiles = @(Select-KssFiles)
     if ($kssFiles.Count -eq 0) {
-        Write-Log "No KSS files selected. Exiting." "Red"
+        Write-Log "No KSS files selected. Put the job's .kss files in this folder ($((Get-Location).Path)) and run again." "Red"
         return
     }
     $allTLs = @($kssFiles | ForEach-Object { $_.TL } | Where-Object { $_ } | Select-Object -Unique)
@@ -2669,21 +2752,20 @@ if ($modeChoice -ne "2") {
 }
 
 $whitelistResult = $null
-Write-Host ""
-Write-Host "========================================================"
-Write-Host "  ASSEMBLY FILTERING OPTIONS"
-Write-Host "========================================================"
-Write-Host "  [Y]es: Load assembly whitelist to include ONLY specific assemblies"
-Write-Host "        - Use for REV (revision) runs, partial builds, or focused subsets"
-Write-Host "        - Assembly list can include R prefix for REV overrides (e.g., R51328511)"
-Write-Host "        - Can include TL prefixes to organize by transmittal (e.g., TL1301 51328511)"
-Write-Host ""
-Write-Host "  [N]o: Include ALL assemblies from selected KSS files (default)"
-Write-Host "       - Use for complete project BOMs"
+Write-Section "Assembly filter"
+Write-Host "  [N] No (default): include ALL assemblies from the selected files"
+Write-Host "  [Y] Yes: only the assemblies you list (REV runs, partial builds)"
 Write-Host ""
 $whitelistChoice = Read-Host "Limit the run to a specific assembly list? [Y]es / [N]o (default: No)"
 if ($whitelistChoice -match '^(y|yes)$') {
-    $whitelistText = Read-Host "Paste assembly list (comma/newline/space separated, works from Excel), or type @path.txt to load a file. Press Enter to use clipboard text if available."
+    Write-Host ""
+    Write-Host "  How to write the list (commas, spaces or new lines all work):"
+    Write-Host "    Plain list ........ 51328511 51318512"
+    Write-Host "    With a TL ......... TL1296  51328511 51318512"
+    Write-Host "    REV (R prefix) .... R51328511   replaces that part from earlier TLs"
+    Write-Host "    TL order .......... 1_TL1301  2_TL1282  3_TL1296   (number sets the order)"
+    Write-Host ""
+    $whitelistText = Read-Host "Paste the list, or type @path.txt to load a file (Enter = use what is on the clipboard)"
     if ([string]::IsNullOrWhiteSpace($whitelistText)) {
         try {
             $whitelistText = Get-Clipboard -ErrorAction Stop
@@ -2719,17 +2801,10 @@ if ($null -ne $whitelistResult -and $whitelistResult.Applied) {
 }
 
 if ($revAssemblies.Count -gt 0) {
-    Write-Host ""
-    Write-Host "========================================================"
-    Write-Host "  REV ASSEMBLY OVERRIDE"
-    Write-Host "========================================================"
+    Write-Section "REV assemblies"
     Write-Host "  Found $($revAssemblies.Count) REV-marked assembly(ies): $($revAssemblies.Keys -join ', ')"
-    Write-Host ""
-    Write-Host "  [Y]es (default): REV assemblies OVERRIDE earlier TL versions"
-    Write-Host "    If 51328511 is in TL1296 AND TL1301 (marked R), keep ONLY TL1301 version"
-    Write-Host ""
-    Write-Host "  [N]o: Keep all versions, show duplicates in output"
-    Write-Host "    51328511 will appear for both TL1296 and TL1301"
+    Write-Host "  [Y] Yes (default): a REV assembly replaces the same part from earlier TLs"
+    Write-Host "  [N] No: keep every version (the part shows once per TL)"
     Write-Host ""
     $revChoice = Read-Host "Apply REV overrides? [Y]es (default) / [N]o"
     $applyRevOverride = if ($revChoice -match '^(n|no)$') { $false } else { $true }
@@ -2742,21 +2817,10 @@ if ($sourceNames.Count -gt 1) {
     $spansFiles = { param($group) @($group.Group | ForEach-Object { $_.SourceFile } | Select-Object -Unique).Count -gt 1 }
     $sharedAssemblies = @($masterData | Group-Object Assembly | Where-Object { & $spansFiles $_ })
     $sharedMarks = @($masterData | Group-Object PartMark | Where-Object { & $spansFiles $_ })
-    Write-Host ""
-    Write-Host "========================================================"
-    Write-Host "  DUPLICATE HANDLING (parts appearing in multiple TLs)"
-    Write-Host "========================================================"
-    Write-Host "Assemblies appearing in more than one file: $($sharedAssemblies.Count)"
-    Write-Host "Part marks appearing in more than one file: $($sharedMarks.Count)"
-    Write-Host ""
-    Write-Host "  [M]erge (default): Combine identical parts into ONE row"
-    Write-Host "    Example: Part 7p352 qty=90 in TL1296 + qty=90 in TL1313 = 180 total"
-    Write-Host "    Use for: Complete project BOMs, purchasing takeoffs"
-    Write-Host ""
-    Write-Host "  [S]eparate: Keep each file's version SEPARATE by TL/file"
-    Write-Host "    Example: 7p352 appears as two rows (TL1296 qty=90, TL1313 qty=90)"
-    Write-Host "    Use for: Comparing TL versions, REV tracking, split manufacturing"
-    Write-Host "    Note: REV deduplication will remove older TL versions automatically"
+    Write-Section "Duplicate parts across TLs"
+    Write-Host "  Assemblies in more than one file: $($sharedAssemblies.Count)    Part marks in more than one file: $($sharedMarks.Count)"
+    Write-Host "  [M] Merge (default): one row per part, quantities added (purchasing, full BOM)"
+    Write-Host "  [S] Separate: one row per part per TL (comparing TLs, REV tracking)"
     Write-Host ""
     $dupChoice = Read-Host "Duplicates across files: [M]erge (default) or [S]eparate?"
     if ($dupChoice -match '^\s*s') { $mergeDuplicates = $false }
@@ -2877,19 +2941,9 @@ if (-not $mergeDuplicates -and $sourceNames.Count -gt 1) {
 
 $combinedShopScripts = $false
 if ($sourceNames.Count -gt 1) {
-    Write-Host ""
-    Write-Host "========================================================"
-    Write-Host "  SHOP SCRIPT GENERATION OPTIONS"
-    Write-Host "========================================================"
-    Write-Host "  [C]ombined (default): ONE set of scripts for all TLs together"
-    Write-Host "    Files: Sort-PlatesByThickness-TL1282_TL1296_TL1301_TL1313.bat"
-    Write-Host "           Type-Quantities-TL1282_TL1296_TL1301_TL1313.bat"
-    Write-Host "           Type-Grades-TL1282_TL1296_TL1301_TL1313.bat"
-    Write-Host "    Use for: Complete shop floor, all plates/quantities/grades in one list"
-    Write-Host ""
-    Write-Host "  [S]eparate: SEPARATE scripts for EACH KSS file/TL"
-    Write-Host "    Files: Sort-PlatesByThickness-TL1282.bat, Sort-PlatesByThickness-TL1296.bat, etc."
-    Write-Host "    Use for: Phase manufacturing, different shop stages, TL-specific work orders"
+    Write-Section "Shop scripts (DXF sort, quantities, grades)"
+    Write-Host "  [C] Combined (default): one set of scripts for all TLs together"
+    Write-Host "  [S] Separate: one set per KSS file / TL (phased work)"
     Write-Host ""
     $shopScriptChoice = Read-Host "Generate shop scripts as [C]ombined (default) or [S]eparate per KSS file?"
     if ($shopScriptChoice -match '^(s|separate)$') { $combinedShopScripts = $false } else { $combinedShopScripts = $true }
@@ -2901,6 +2955,7 @@ if ($null -ne $kssFilesInScope -and $kssFilesInScope.Count -gt 0) {
     $filteredKssOutput = Write-FilteredAssemblyKssFile -MasterData $masterData -AssemblyDrawings $assemblyDrawings -ProjectName $projectName -JobNumber $jobNumber -SourceFiles $kssFilesInScope -TLs $allTLs
     if ($filteredKssOutput) {
         Write-Log "Generated filtered KISS package: $filteredKssOutput" "Green"
+        Add-OutputFile $filteredKssOutput
     }
 }
 
@@ -4570,6 +4625,7 @@ function Write-QualityProcessReport {
         $wb.SaveAs($qprPath)
         $wb.Close($false)
 
+        Add-OutputFile $qprPath
         Write-Log "Quality Process Report saved to:" "Green"
         Write-Log " -> $qprPath" "Yellow"
         return $qprPath
@@ -4584,30 +4640,20 @@ function Write-QualityProcessReport {
 
 
 # --- QPR OPTIONS (asked here so the QPR can also become tabs in this workbook) ---
-Write-Host ""
-Write-Host "========================================================"
-Write-Host "  QUALITY PROCESS REPORT (QPR) OPTIONS"
-Write-Host "========================================================"
-Write-Host "  [Y]es: Generate detailed shop floor quality/inspection sheets (added as tabs in the BOM workbook and saved as a separate QPR workbook)"
-Write-Host "  [N]o: Skip QPR generation (default)"
+Write-Section "Quality Process Report (QPR)"
+Write-Host "  [N] No (default): skip it"
+Write-Host "  [Y] Yes: shop-floor inspection sheets, added as tabs to the BOM and saved as their own workbook"
 Write-Host ""
 $qprChoice = Read-Host "Generate Quality Process Report (QPR)? [Y]es / [N]o (default: No)"
 if ($qprChoice -match '^(y|yes)$') {
     Write-Host ""
-    Write-Host "  Job name for the QPR (used as the sheet prefix and printed in the Job: box on each sheet)"
-    Write-Host "  Example: enter '25-351' -> sheets named '25-351 - TL1282', '25-351 - TL1296', etc."
+    Write-Host "  Job name is the sheet prefix and the Job: box, e.g. '25-351' -> '25-351 - TL1282'"
     $qprJobInput = Read-Host "Job name (default: $jobNumber)"
     $qprJobNumber = if ($qprJobInput) { $qprJobInput } else { $jobNumber }
 
     Write-Host ""
-    Write-Host "  QPR Sheet Organization:"
-    Write-Host "  [T]L (default): Organize by Transmittal number"
-    Write-Host "    Sheets: $qprJobNumber - TL1282 | $qprJobNumber - TL1296 | $qprJobNumber - TL1301"
-    Write-Host "    Use for: Manufacturing by transmittal/revision phase"
-    Write-Host ""
-    Write-Host "  [S]equence: Organize by Sequence (first 4 digits of assembly), still labeled with the TL"
-    Write-Host "    Sheets: $qprJobNumber - TL1296 - 5131 | $qprJobNumber - TL1296 - 5132 | $qprJobNumber - TL1313 - 5133"
-    Write-Host "    Use for: Manufacturing by structural family/sequence"
+    Write-Host "  [T] TL (default): one sheet per transmittal     $qprJobNumber - TL1282 | $qprJobNumber - TL1296"
+    Write-Host "  [S] Sequence: one sheet per TL + sequence       $qprJobNumber - TL1296 - 5131 | $qprJobNumber - TL1296 - 5132"
     Write-Host ""
     $qprGroupChoice = Read-Host "Organize sheets by [T]L number (default) or [S]equence?"
     $qprGroupBy = if ($qprGroupChoice -match '^(s|sequence)$') { "Sequence" } else { "TL" }
@@ -4728,6 +4774,7 @@ if (Test-Path $exportPath) {
 
 $sheet1.Activate()
 $workbook.SaveAs($exportPath)
+Add-OutputFile $exportPath
 $workbook.Close($false)
 $excel.Quit()
 
@@ -4741,7 +4788,7 @@ Remove-Variable excel
 
 
 # 5. GENERATE PER-FILE SHOP SCRIPTS (DXF SORT, QUANTITIES, GRADES) + MASTER LAUNCHER
-Write-Log "Generating shop scripts and master launcher..." "Yellow"
+Write-Log "Generating shop scripts..." "Yellow"
 $scriptSets = [System.Collections.Generic.List[PSCustomObject]]::new()
 $usedLabels = @{}
 
@@ -4768,7 +4815,7 @@ else {
 }
 
 if ($scriptSets.Count -gt 0) {
-    Write-Log "Generated shop scripts without a master launcher." "Yellow"
+    Write-Log "Shop scripts ready." "Green"
 }
 
 
@@ -4782,3 +4829,24 @@ if ($scriptSets.Count -gt 0) {
 if ($qprChoice -match '^(y|yes)$') {
     Write-QualityProcessReport -MasterData $masterData -ProjectName $projectName -JobNumber $jobNumber -QprJobNumber $qprJobNumber -GroupBy $qprGroupBy
 }
+
+# =====================================================================
+# 7. DONE: list what was made and offer to open the folder
+# =====================================================================
+Write-Section "Done"
+$doneFolder = (Get-Location).Path
+Write-Host "  Saved in: $doneFolder" -ForegroundColor Green
+$groups = [ordered]@{
+    'Workbooks'      = @($script:OutputFiles | Where-Object { $_ -like '*.xlsx' })
+    'Filtered KISS'  = @($script:OutputFiles | Where-Object { $_ -like '*.kss' })
+    'Shop scripts'   = @($script:OutputFiles | Where-Object { $_ -like '*.bat' })
+}
+foreach ($g in $groups.Keys) {
+    if ($groups[$g].Count -gt 0) {
+        Write-Host "  $g" -ForegroundColor Yellow
+        foreach ($f in $groups[$g]) { Write-Host "    - $([System.IO.Path]::GetFileName($f))" }
+    }
+}
+Write-Host ""
+$openChoice = Read-Host "Open the folder now? [Y]es (default) / [N]o"
+if ($openChoice -notmatch '^(n|no)$') { try { Start-Process explorer.exe -ArgumentList "`"$doneFolder`"" } catch { } }

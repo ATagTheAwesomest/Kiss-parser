@@ -72,7 +72,7 @@ A `D` line must have at least 10 comma-separated fields to be accepted. Fields a
 8. **Shop script style (only if more than one file):** `C`ombined (one set for all TLs, default) or `S`eparate per TL.
 9. The filtered KSS is written, Excel is launched and the tabs are built, and the workbook is saved.
 10. Shop scripts are generated.
-11. Optional: Quality Process Report, grouped by TL (default) or by sequence (first 4 digits of the assembly), with a job name prefix for the sheet names. Sheet names (and the Job: box on each sheet) read `{job} - {TL}`, or `{job} - {TL} - {sequence}` when grouped by sequence.
+11. Optional: Quality Process Report, grouped by TL (default) or by sequence (first 4 digits of the assembly), with a job name prefix for the sheet names. Sheet names (and the Job: box on each sheet) read `{job} - {TL}`, or `{job} - {TL} - {sequence}` when grouped by sequence. The QPR questions are asked before the BOM workbook is built: answering Yes adds the QPR sheets as tabs at the end of the master BOM workbook (same sheet layout and names) and also saves the separate QPR workbook as before. In the master workbook the Job: box follows `Set_CustomerJob` on the Settings tab (when the job name was left at the default), and on sequence-grouped sheets the line under the title shows the Due date and Paint / REVISES note read live from the Sequence Notes tab, so edit them there.
 
 ## 4. Parsing logic details
 

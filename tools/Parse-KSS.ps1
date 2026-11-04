@@ -556,31 +556,65 @@ function ConvertTo-TransmittalTag ($text) {
 # TL name in the "TL Name" row, the AFCO assembly numbers underneath, and optional "Paint / TL Details" and
 # "Due Date" rows above. A REV transmittal is named TLR####. Each transmittal + sequence (folder) becomes one 3.5" x 1.125" label.
 function Select-RequiredAssmFile {
-    $files = @(Get-ChildItem -LiteralPath (Get-Location).Path -Filter *.xlsx -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -notlike '~$*' -and $_.Name -match '(?i)required[\s_-]*assm' } |
-        Sort-Object Name)
-    if ($files.Count -eq 0) { return $null }
+    param([string[]]$ExtraFolders = @())
 
-    Write-Section "Folder labels (Required Assm workbook)"
-    if ($files.Count -eq 1) {
-        Write-Host "Files: $($files[0].Name)"
-        Write-Host ""
-        Write-Host "  [Y] Yes (default): labels, work orders, paint / due dates and the Exceptions tab from this file"
-        Write-Host "  [N] No: skip the labels"
-        $choice = Read-Host "Build folder labels from this file? [Y]es / [N]o (default: Yes)"
-        if ($choice -match '^(n|no)$') { return $null }
-        return $files[0].FullName
+    # Where to look: working folder, its jobs folder, the folders of the chosen .kss files, the KISS jobs folder, then common spots.
+    $roots = @()
+    $roots += (Get-Location).Path
+    $roots += (Join-Path (Get-Location).Path 'jobs')
+    $roots += $ExtraFolders
+    if ($PSScriptRoot) { $roots += (Join-Path (Split-Path -Parent $PSScriptRoot) 'jobs') }
+    foreach ($sub in 'Downloads', 'Desktop', 'Documents') {
+        if ($env:USERPROFILE) { $roots += (Join-Path $env:USERPROFILE $sub) }
     }
+    $roots = @($roots | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) } |
+        ForEach-Object { (Resolve-Path -LiteralPath $_).Path } | Select-Object -Unique)
 
-    Write-Host "Found $($files.Count) Required Assm workbooks:"
-    for ($i = 0; $i -lt $files.Count; $i++) { Write-Host "  [$($i + 1)] $($files[$i].Name)" }
+    $root = (Get-Location).Path
+    $found = @()
+    foreach ($r in $roots) {
+        $depth = if ($env:USERPROFILE -and $r.StartsWith($env:USERPROFILE, [StringComparison]::OrdinalIgnoreCase) -and -not $r.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { 0 } else { 2 }
+        $found += @(Get-ChildItem -LiteralPath $r -Filter *.xlsx -File -Recurse -Depth $depth -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike '~$*' -and $_.Name -match '(?i)required[\s_-]*assm' })
+    }
+    $files = @($found | Sort-Object FullName -Unique | Sort-Object LastWriteTime -Descending | Select-Object -First 9)
+    Write-Section "Folder labels (Required Assm workbook)"
+    if ($files.Count -gt 0) {
+        Write-Host "Found these Required Assm workbooks (newest first):"
+        for ($i = 0; $i -lt $files.Count; $i++) {
+            $f = $files[$i]
+            $where = $f.DirectoryName
+            if ($where.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { $where = '.' + $where.Substring($root.Length) }
+            Write-Host ("  [{0}] {1}   ({2:M/d/yy h:mm tt}, {3})" -f ($i + 1), $f.Name, $f.LastWriteTime, $where)
+        }
+    }
+    else {
+        Write-Host "No Required Assm workbook found nearby."
+    }
+    Write-Host "  [B] Browse for a file..."
     Write-Host "  [0] Skip the folder labels"
-    $pick = Read-Host "Which file? (default: 1)"
-    if ($pick -match '^\s*0\s*$|^(n|no)$') { return $null }
-    $n = 1
-    if ($pick -match '^\s*(\d+)\s*$') { $n = [int]$Matches[1] }
-    if ($n -lt 1 -or $n -gt $files.Count) { $n = 1 }
-    return $files[$n - 1].FullName
+    $dflt = if ($files.Count -gt 0) { "1" } else { "0" }
+
+    while ($true) {
+        $pick = (Read-Host "Which file? (default: $dflt)").Trim()
+        if ($pick -eq '') { $pick = $dflt }
+        if ($pick -match '^(0|n|no|s|skip)$') { return $null }
+        if ($pick -match '^(b|browse)$') {
+            try {
+                Add-Type -AssemblyName System.Windows.Forms | Out-Null
+                $dialog = New-Object System.Windows.Forms.OpenFileDialog
+                $dialog.Filter = "Excel workbooks (*.xlsx)|*.xlsx|All Files (*.*)|*.*"
+                $dialog.InitialDirectory = $root
+                $dialog.Title = "Select the Required Assm workbook"
+                if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $dialog.FileName }
+                Write-Host "  Nothing picked." -ForegroundColor Yellow
+            }
+            catch { Write-Host "  The file picker could not open: $($_.Exception.Message)" -ForegroundColor Yellow }
+            continue
+        }
+        if ($pick -match '^\d+$' -and [int]$pick -ge 1 -and [int]$pick -le $files.Count) { return $files[[int]$pick - 1].FullName }
+        Write-Host "  Pick a number from the list, B to browse, or 0 to skip." -ForegroundColor Yellow
+    }
 }
 
 # Date cells come back from Excel as OLE doubles; typed text is kept as typed.
@@ -4320,7 +4354,7 @@ $requiredAssmPath = $null
 $ourJobNumber = ""
 $issuedBy = ""
 if ($modeChoice -ne "2") {
-    $requiredAssmPath = Select-RequiredAssmFile
+    $requiredAssmPath = Select-RequiredAssmFile -ExtraFolders @($kssFiles | ForEach-Object { Split-Path -Parent $_.FullName })
     $guessJob = ""
     if ($requiredAssmPath -and [System.IO.Path]::GetFileName($requiredAssmPath) -match '^\s*(\d{4,6})') { $guessJob = $Matches[1] }
     $jobPrompt = if ($guessJob) { "Our job number (default: $guessJob)" } else { "Our job number (shown on the labels and work orders)" }

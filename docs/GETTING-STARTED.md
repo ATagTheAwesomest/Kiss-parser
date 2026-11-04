@@ -45,10 +45,10 @@ Press **Enter** to take the answer shown as `(default)`. Some screens only appea
 | Main menu | Centered list: `1` build the job paperwork (default), `2` soundwall CSV, `3` new blank Required Assm workbook, `H` this guide, `Q` quit. Each entry has a short explanation under it | Enter (build the paperwork) |
 | Select KSS files | Up/Down to move, Space to tick, `A` all, `N` none, Enter to confirm | Tick the TLs for this run |
 | TL for a file | Only if the file name has no TL. Type `TL012` or `12`, or Enter to leave blank | The TL number |
-| Folder labels | KISS searches the working folder, `jobs`, the folders of your .kss files, Downloads, Desktop and Documents for `*REQUIRED ASSM*.xlsx` and lists what it finds, newest first. Pick a number, `B` to open a file picker window, or `0` to skip. You never type a path | Enter (newest file) |
+| Required Assm workbook | KISS searches the working folder, `jobs`, the folders of your .kss files, Downloads, Desktop and Documents for `*REQUIRED ASSM*.xlsx` and lists what it finds, newest first. Pick a number, `B` to open a file picker window, or `0` to skip. You never type a path. **The workbook you pick is the filter for the whole run** (see the next row) | Enter (newest file) |
 | Our job number / initials | Printed on the labels and work orders. Initials = who is making the folders | Job number, your initials |
-| Assembly filter | Limit the run to a list of assemblies? | No for a full job. Yes for a REV or partial run, then paste the list |
-| REV assemblies | Only after a filter with `R` marks. Should REV assemblies replace the same part in earlier TLs? | Yes |
+| Assembly filter | **With a Required Assm workbook: nothing to answer.** KISS reads Sheet1 and limits the run to the assemblies listed there, for the TLs you selected (a `TLR####` column is a REV and replaces the same assemblies from earlier TLs). It prints a line per TL, warns about selected TLs missing from the workbook, and counts assemblies in the `.kss` files that are not in the workbook (left out). TL Notes and Exceptions are read too. **Without a workbook** (you chose `0`, or soundwall CSV): Limit the run to a list of assemblies? | Nothing, with a workbook. Without one: No for a full job, Yes for a partial run, then paste the list |
+| REV assemblies | Only for a hand-typed list with `R` marks. Should REV assemblies replace the same part in earlier TLs? (A workbook's REV columns always do; no question.) | Yes |
 | Duplicate parts | Only with more than one file. Merge identical parts into one row, or keep them separate per TL | Merge |
 | Quality Process Report | Make QPR inspection sheets? If yes: job name (sheet prefix) and one sheet per TL or per Sequence | No, unless QC needs it |
 

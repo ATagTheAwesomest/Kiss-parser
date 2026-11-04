@@ -44,9 +44,9 @@ Quality Process Report: each sheet is named `{job} - {TL}`, or `{job} - {TL} - {
 
 1. Copy or drop the job's `.kss` files into `jobs/` (or any folder).
 2. Double-click `Start-KISS.bat` (runs in `jobs/`), or drag the job's folder onto it. By hand: in that folder, `powershell -ExecutionPolicy Bypass -File <path to KISS>\tools\Parse-KSS.ps1`
-3. Answer the prompts: data source, which files and TLs, optional folder labels (needs a `... REQUIRED ASSM.xlsx` in the
-   folder, see [PARSING.md](docs/PARSING.md) section 6a), optional assembly whitelist, rev overrides,
-   duplicates, QPR. (The shop scripts ask later, when you run them, which TLs / sequences you are nesting.) Details in [docs/PARSING.md](docs/PARSING.md).
+3. Answer the prompts: data source, which files and TLs, the Required Assm workbook (a `... REQUIRED ASSM.xlsx`, found automatically or picked; it limits the run to its assemblies with no
+   assembly-list prompt, and drives REV handling, TL notes, exceptions and labels, see [PARSING.md](docs/PARSING.md) sections 5a and 6a),
+   an assembly list only when no workbook is used, duplicates, QPR. (The shop scripts ask later, when you run them, which TLs / sequences you are nesting.) Details in [docs/PARSING.md](docs/PARSING.md).
 
 Outputs are written to the folder the script runs in. The generated `.bat` files find their DXF folder
 relative to themselves, so keep them with the job files.

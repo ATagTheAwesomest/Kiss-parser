@@ -65,9 +65,9 @@ A `D` line must have at least 10 comma-separated fields to be accepted. Fields a
 2. **File picker:** lists every `.kss` in the current folder (arrow keys and Space to check, `A` all, `N` none, Enter to confirm). It hides files whose names contain `- Filtered Assemblies` or `(Generated)`, so the script's own outputs aren't re-read.
 3. **TL (transmittal) detection:** the TL tag comes from the **file name**, matching `TL` followed by digits (`TL1282`, `TL 12`, `TL_012`, `TL-12` all become `TL<digits>`). If none is found, the operator is asked to type one or leave it blank. This is why file names matter.
 4. **Parse:** each file is read line by line and `H`, `A`, `D`, `L` lines are collected into in-memory lists (Master data and Labor data). The first file's `H` line sets the job number and project name. If a later file's header differs, a yellow warning is shown and the first file's values are kept.
-4b. **Folder labels (optional):** if the folder holds a `... REQUIRED ASSM.xlsx`, the script offers to add a `Folder Labels` tab to the BOM workbook (section 6a). It asks for our job number (default: the leading digits of the file name, e.g. `26102`).
-5. **Assembly whitelist (optional):** limits the run to listed assemblies (section 5).
-6. **REV override (only if the whitelist has `R` entries):** replace older TL versions of an assembly.
+4b. **Required Assm workbook (optional):** the script searches for a `... REQUIRED ASSM.xlsx` (or you browse), asks for our job number (default: the leading digits of the file name, e.g. `26102`) and initials, and reads the workbook right away in a short-lived hidden Excel. The workbook drives the whole run: the filter (step 5), TL Notes, Exceptions, REV placement, `Folder Labels` and work orders (section 6a).
+5. **Assembly filter:** with a workbook it is automatic and there is no prompt (section 5a). Without one the operator may paste an assembly list (section 5).
+6. **REV override:** a REV column (`TLR####`) in the workbook always replaces older TL versions of its assemblies, no question. A hand-typed list with `R` entries asks first.
 7. **Duplicate handling (only if more than one file):** `M`erge identical part marks across files into one row (default), or `S`eparate to keep each file's rows apart by TL. Merging warns when the same mark has a different shape/size/grade/length in different files.
 8. The filtered KSS is written, Excel is launched and the tabs are built, and the workbook is saved.
 9. Shop scripts are generated: one select-aware set for the whole run (no questions at parse time).
@@ -87,6 +87,8 @@ A `D` line must have at least 10 comma-separated fields to be accepted. Fields a
 - **Master BOM extended weight** is a live Excel formula (`Qty x Unit Wt`). The `Status` column is filled with `PENDING`.
 
 ## 5. Assembly whitelist and REV logic
+
+This is the manual list, used only when no Required Assm workbook is chosen (or in soundwall CSV mode). With a workbook, section 5a builds the same list for you.
 
 The operator can paste a list, type `@path.txt` to load a file, or press Enter to use whatever is on the clipboard. Tokens split on commas, semicolons, pipes and whitespace, so a column copied from Excel works.
 
@@ -123,6 +125,19 @@ One set of two scripts for the whole run (no combined / separate question; the o
 - **Preview** (before anything runs, built from the selection): the first 5 plates (A-Z), the last 5 and the 5 highest quantities, each with mark, thickness folder, quantity and grade; the Sort script also shows `<mark>.dxf` and whether the file is found. Implemented by collecting the selected plates into `P_<n>_*` variables.
 - If one mark has different sizes or grades in different transmittals, the generator warns and uses the first for thickness and grade.
 - Menus use ANSI colors (Windows 10 or newer console).
+
+## 5a. The Required Assm workbook is the filter
+
+When a Required Assm workbook is picked, the "Assembly filter" step is automatic. Nothing is typed or pasted.
+
+1. Each TL column of `Sheet1` becomes one line of the whitelist (`TL1296 51311000 51311001 ...`). Only the TLs whose `.kss` was selected for the run are used; workbook TLs that were not selected are ignored (listed in dark gray).
+2. A REV column (`TLR1301`) is written with the `R` prefix and added last, so its assemblies replace the same assemblies from earlier TLs (the TL tag on those rows becomes `TL1301`). The "Apply REV overrides?" question is skipped; the REV always applies.
+3. The list goes through the same code as a typed list (section 5), so the cost-code TL, the REV rules and the filtered `.kss` behave exactly as before.
+4. The screen shows one line per TL (assembly count, REV marked), a yellow warning for a selected TL that is not in the workbook (none of its assemblies are kept), the count of assemblies in the `.kss` files that are not in the workbook (left out), and the assemblies the workbook lists that the `.kss` files do not contain.
+5. TL Notes (paint, explanation, due date per sequence) and the Exceptions tab are read from the same workbook and feed the Master BOM, Sequence Notes, Assembly Exceptions, work orders and labels as in sections 6a to 6b.
+6. If none of the selected TLs is in the workbook, KISS says so and falls back to the manual assembly list question.
+
+To run without the workbook filter, choose `0` (skip) at the workbook question.
 
 ## 6a. Folder labels (Required Assm workbook)
 

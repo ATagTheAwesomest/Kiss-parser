@@ -551,7 +551,7 @@ function ConvertTo-TransmittalTag ($text) {
     return ($t -replace '\s', '')
 }
 
-# --- FOLDER LABELS (from the "Required Assm" workbook) ---
+# --- REQUIRED ASSM WORKBOOK (the run filter, the TL / sequence info, the Exceptions and the folder labels) ---
 # Looks for a "... REQUIRED ASSM.xlsx" in the current folder. Its Sheet1 has one column per transmittal:
 # TL name in the "TL Name" row, the AFCO assembly numbers underneath, and optional "Paint / TL Details" and
 # "Due Date" rows above. A REV transmittal is named TLR####. Each transmittal + sequence (folder) becomes one 3.5" x 1.125" label.
@@ -578,7 +578,7 @@ function Select-RequiredAssmFile {
             Where-Object { $_.Name -notlike '~$*' -and $_.Name -match '(?i)required[\s_-]*assm' })
     }
     $files = @($found | Sort-Object FullName -Unique | Sort-Object LastWriteTime -Descending | Select-Object -First 9)
-    Write-Section "Folder labels (Required Assm workbook)"
+    Write-Section "Required Assm workbook"
     if ($files.Count -gt 0) {
         Write-Host "Found these Required Assm workbooks (newest first):"
         for ($i = 0; $i -lt $files.Count; $i++) {
@@ -592,7 +592,7 @@ function Select-RequiredAssmFile {
         Write-Host "No Required Assm workbook found nearby."
     }
     Write-Host "  [B] Browse for a file..."
-    Write-Host "  [0] Skip the folder labels"
+    Write-Host "  [0] Skip (no workbook: all assemblies, or type your own list)"
     $dflt = if ($files.Count -gt 0) { "1" } else { "0" }
 
     while ($true) {
@@ -614,6 +614,55 @@ function Select-RequiredAssmFile {
         }
         if ($pick -match '^\d+$' -and [int]$pick -ge 1 -and [int]$pick -le $files.Count) { return $files[[int]$pick - 1].FullName }
         Write-Host "  Pick a number from the list, B to browse, or 0 to skip." -ForegroundColor Yellow
+    }
+}
+
+# Reads the workbook in a short-lived Excel of its own so the assembly filter can be built before the main run's Excel starts.
+function Read-RequiredAssmStandalone ([string]$Path) {
+    $xl = $null
+    try {
+        $xl = New-Object -ComObject Excel.Application
+        $xl.Visible = $false
+        $xl.DisplayAlerts = $false
+        return @(Read-RequiredAssm -Excel $xl -Path $Path | Where-Object { $_ })
+    }
+    finally {
+        if ($xl) {
+            try { $xl.Quit() } catch { }
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($xl)
+        }
+    }
+}
+
+# The Required Assm workbook IS the assembly filter: turns each transmittal column of Sheet1 into one line of the
+# whitelist text that Parse-AssemblyWhitelist understands ("TL1296 51311000 51311001 ..."). Only transmittals whose .kss
+# is in this run are used. A REV transmittal (TLR####) is written with the R prefix and goes last, so its assemblies
+# replace the same assemblies from earlier transmittals.
+# Returns Text, per-TL counts (Used), workbook TLs that are not in this run (NotInRun) and run TLs that are not in the workbook (NotInWorkbook).
+function Get-WorkbookAssemblyFilter {
+    param($WorkbookTLs, [string[]]$RunTLs = @())
+
+    $runNums = @($RunTLs | Where-Object { $_ } | ForEach-Object { [int]($_ -replace '\D', '0') })
+    $inRun = @($WorkbookTLs | Where-Object { $runNums.Count -eq 0 -or $runNums -contains [int]$_.Number })
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $used = [System.Collections.Generic.List[object]]::new()
+    foreach ($tl in @($inRun | Sort-Object @{ Expression = { [bool]$_.IsRev } }, Number)) {
+        $prefix = if ($tl.IsRev) { 'R' } else { '' }
+        $names = [System.Collections.Generic.List[string]]::new()
+        foreach ($seq in @($tl.Sequences)) {
+            foreach ($a in @($tl.SeqAssemblies[$seq] | Sort-Object)) { $names.Add("$prefix$a") }
+        }
+        if ($names.Count -eq 0) { continue }
+        $lines.Add("TL$($tl.Number) " + ($names -join ' '))
+        $used.Add([PSCustomObject]@{ TL = $tl.TL; IsRev = [bool]$tl.IsRev; Count = $names.Count })
+    }
+    $workbookNums = @($WorkbookTLs | ForEach-Object { [int]$_.Number })
+    return [PSCustomObject]@{
+        Text          = ($lines -join "`n")
+        Used          = @($used)
+        AssemblyCount = [int](($used | Measure-Object -Property Count -Sum).Sum)
+        NotInRun      = @($WorkbookTLs | Where-Object { $runNums.Count -gt 0 -and $runNums -notcontains [int]$_.Number } | ForEach-Object { $_.TL })
+        NotInWorkbook = @($RunTLs | Where-Object { $_ -and $workbookNums -notcontains [int]($_ -replace '\D', '0') })
     }
 }
 
@@ -1623,7 +1672,7 @@ function Get-ExceptionRows {
             if ($seen.ContainsKey($k)) { continue }
             $ex = $ExceptionMap[$k]
             $inSheet = @($WorkbookTLs | Where-Object { $_.SeqAssemblies.Values | Where-Object { $_.Contains($k) } }).Count -gt 0
-            $why = if ($inSheet) { "its transmittal's .kss is not in the selected files, or the assembly filter left it out" } else { "not listed in Sheet1 of the Required Assm workbook" }
+            $why = if ($inSheet) { "its transmittal's .kss is not in the selected files" } else { "not listed in Sheet1 of the Required Assm workbook" }
             $notInRun.Add([PSCustomObject]@{ Assembly = $k; Paint = $ex.Paint; Explanation = $ex.Explanation; DueDate = $ex.DueDate; Why = $why })
         }
     }
@@ -4351,6 +4400,7 @@ if ($allTLs.Count -gt 0) { Write-Log "Transmittals: $($allTLs -join ', ')" "Cyan
 
 # Folder labels: optional Required Assm workbook (asked once, built later inside the BOM workbook)
 $requiredAssmPath = $null
+$workbookTLs = @()
 $ourJobNumber = ""
 $issuedBy = ""
 if ($modeChoice -ne "2") {
@@ -4362,46 +4412,95 @@ if ($modeChoice -ne "2") {
     $ourJobNumber = if ($ourJobInput) { $ourJobInput } else { $guessJob }
     if ($requiredAssmPath) {
         $issuedBy = (Read-Host "Initials of who is making the folders (Enter to leave blank)").Trim().ToUpper()
+        # The workbook is read now because it decides which assemblies are in this run (see "Assembly filter" below).
+        try {
+            Write-Log "Reading the Required Assm workbook..."
+            $workbookTLs = @(Read-RequiredAssmStandalone -Path $requiredAssmPath)
+        }
+        catch { Write-Log "Could not read the Required Assm workbook: $($_.Exception.Message)" "Red" }
     }
 }
 
 $whitelistResult = $null
-Write-Section "Assembly filter"
-Write-Host "  [N] No (default): include ALL assemblies from the selected files"
-Write-Host "  [Y] Yes: only the assemblies you list (REV runs, partial builds)"
-Write-Host ""
-$whitelistChoice = Read-Host "Limit the run to a specific assembly list? [Y]es / [N]o (default: No)"
-if ($whitelistChoice -match '^(y|yes)$') {
-    Write-Host ""
-    Write-Host "  How to write the list (commas, spaces or new lines all work):"
-    Write-Host "    Plain list ........ 51328511 51318512"
-    Write-Host "    With a TL ......... TL1296  51328511 51318512"
-    Write-Host "    REV (R prefix) .... R51328511   replaces that part from earlier TLs"
-    Write-Host "    TL order .......... 1_TL1301  2_TL1282  3_TL1296   (number sets the order)"
-    Write-Host ""
-    $whitelistText = Read-Host "Paste the list, or type @path.txt to load a file (Enter = use what is on the clipboard)"
-    if ([string]::IsNullOrWhiteSpace($whitelistText)) {
-        try {
-            $whitelistText = Get-Clipboard -ErrorAction Stop
-        }
-        catch {
-            $whitelistText = ""
-        }
+$usedWorkbookFilter = $false
+if ($workbookTLs.Count -gt 0 -and $modeChoice -ne "2") {
+    # A Required Assm workbook is the filter: its assemblies, per transmittal (REV columns included), are the run.
+    Write-Section "Assembly filter (from the Required Assm workbook)"
+    $wf = Get-WorkbookAssemblyFilter -WorkbookTLs $workbookTLs -RunTLs $allTLs
+    if ($wf.AssemblyCount -eq 0) {
+        Write-Log "None of the selected transmittals ($($allTLs -join ', ')) has assemblies in the workbook, so it cannot filter this run." "Yellow"
+        Write-Log "Check the TL names in Sheet1 of the workbook. Falling back to the manual assembly list." "Yellow"
     }
+    else {
+        foreach ($u in $wf.Used) {
+            $kind = if ($u.IsRev) { "  (REV: replaces the same assemblies from earlier TLs)" } else { "" }
+            Write-Host ("  {0,-8} {1,4} assemblies{2}" -f $u.TL, $u.Count, $kind)
+        }
+        if ($wf.NotInWorkbook.Count -gt 0) {
+            Write-Log "Selected but NOT in the workbook, so none of their assemblies are included: $($wf.NotInWorkbook -join ', ')" "Yellow"
+        }
+        if ($wf.NotInRun.Count -gt 0) {
+            Write-Log "In the workbook but not selected for this run (ignored): $($wf.NotInRun -join ', ')" "DarkGray"
+        }
+        $inFiles = @($masterData | ForEach-Object { "$($_.Assembly)".Trim() } | Where-Object { $_ } | Select-Object -Unique)
+        $wanted = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($u in $workbookTLs) { foreach ($set in $u.SeqAssemblies.Values) { foreach ($a in $set) { [void]$wanted.Add($a) } } }
+        $leftOut = @($inFiles | Where-Object { -not $wanted.Contains($_) })
+        if ($leftOut.Count -gt 0) {
+            Write-Log "$($leftOut.Count) assembly(ies) in the selected files are not in the workbook and are left out." "Yellow"
+        }
 
-    if (-not [string]::IsNullOrWhiteSpace($whitelistText)) {
-        $whitelistResult = Apply-AssemblyWhitelist -MasterData $masterData -LaborData $laborData -AssemblyDrawings $assemblyDrawings -AssemblyListText $whitelistText
+        $whitelistResult = Apply-AssemblyWhitelist -MasterData $masterData -LaborData $laborData -AssemblyDrawings $assemblyDrawings -AssemblyListText $wf.Text
         if ($whitelistResult.Applied) {
-            if ($whitelistResult.Missing.Count -gt 0 -and $whitelistResult.MasterData.Count -eq 0) {
-                throw "Assembly whitelist produced zero matching records. Check the filter values in '$whitelistText' or the source data."
+            if ($whitelistResult.MasterData.Count -eq 0) {
+                throw "None of the workbook's assemblies were found in the selected .kss files. Check that the right files are selected and the TL names in the workbook match."
             }
             $masterData = $whitelistResult.MasterData
             $laborData = $whitelistResult.LaborData
             $assemblyDrawings = $whitelistResult.AssemblyDrawings
+            $usedWorkbookFilter = $true
         }
     }
-    else {
-        Write-Log "No assembly list entered; keeping all assemblies." "Yellow"
+}
+
+if (-not $usedWorkbookFilter) {
+    Write-Section "Assembly filter"
+    Write-Host "  [N] No (default): include ALL assemblies from the selected files"
+    Write-Host "  [Y] Yes: only the assemblies you list (REV runs, partial builds)"
+    Write-Host ""
+    $whitelistChoice = Read-Host "Limit the run to a specific assembly list? [Y]es / [N]o (default: No)"
+    if ($whitelistChoice -match '^(y|yes)$') {
+        Write-Host ""
+        Write-Host "  How to write the list (commas, spaces or new lines all work):"
+        Write-Host "    Plain list ........ 51328511 51318512"
+        Write-Host "    With a TL ......... TL1296  51328511 51318512"
+        Write-Host "    REV (R prefix) .... R51328511   replaces that part from earlier TLs"
+        Write-Host "    TL order .......... 1_TL1301  2_TL1282  3_TL1296   (number sets the order)"
+        Write-Host ""
+        $whitelistText = Read-Host "Paste the list, or type @path.txt to load a file (Enter = use what is on the clipboard)"
+        if ([string]::IsNullOrWhiteSpace($whitelistText)) {
+            try {
+                $whitelistText = Get-Clipboard -ErrorAction Stop
+            }
+            catch {
+                $whitelistText = ""
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($whitelistText)) {
+            $whitelistResult = Apply-AssemblyWhitelist -MasterData $masterData -LaborData $laborData -AssemblyDrawings $assemblyDrawings -AssemblyListText $whitelistText
+            if ($whitelistResult.Applied) {
+                if ($whitelistResult.Missing.Count -gt 0 -and $whitelistResult.MasterData.Count -eq 0) {
+                    throw "Assembly whitelist produced zero matching records. Check the filter values in '$whitelistText' or the source data."
+                }
+                $masterData = $whitelistResult.MasterData
+                $laborData = $whitelistResult.LaborData
+                $assemblyDrawings = $whitelistResult.AssemblyDrawings
+            }
+        }
+        else {
+            Write-Log "No assembly list entered; keeping all assemblies." "Yellow"
+        }
     }
 }
 
@@ -4414,7 +4513,11 @@ if ($null -ne $whitelistResult -and $whitelistResult.Applied) {
     $revAssemblies = $whitelistResult.RevMap
 }
 
-if ($revAssemblies.Count -gt 0) {
+if ($revAssemblies.Count -gt 0 -and $usedWorkbookFilter) {
+    # REV columns (TLR####) in the workbook always replace the same assembly from earlier TLs; nothing to ask.
+    Write-Log "REV assemblies from the workbook: $($revAssemblies.Count) (each replaces the same assembly from earlier TLs)." "Cyan"
+}
+elseif ($revAssemblies.Count -gt 0) {
     Write-Section "REV assemblies"
     Write-Host "  Found $($revAssemblies.Count) REV-marked assembly(ies): $($revAssemblies.Keys -join ', ')"
     Write-Host "  [Y] Yes (default): a REV assembly replaces the same part from earlier TLs"
@@ -4583,8 +4686,7 @@ $sequenceNoteRows = @()
 $asmByKey = @{}
 if ($modeChoice -ne "2") {
     if ($requiredAssmPath) {
-        try { $allWorkbookTLs = @(Read-RequiredAssm -Excel $excel -Path $requiredAssmPath | Where-Object { $_ }) }
-        catch { Write-Log "Could not read the Required Assm workbook: $($_.Exception.Message)" "Red" }
+        $allWorkbookTLs = @($workbookTLs)        # already read before the assembly filter
     }
     $revAssemblies = @{}; $tlNames = @{}; $workOrderDue = @{}; $revisesByKey = @{}; $workOrderNotes = @{}
     foreach ($tlEntry in @($allWorkbookTLs | Sort-Object Number)) {

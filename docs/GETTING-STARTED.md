@@ -45,7 +45,7 @@ Press **Enter** to take the answer shown as `(default)`. Some screens only appea
 | Main menu | Centered list: `1` build the job paperwork (default), `2` soundwall CSV, `3` new blank Required Assm workbook, `H` this guide, `Q` quit. Each entry has a short explanation under it | Enter (build the paperwork) |
 | Select KSS files | Up/Down to move, Space to tick, `A` all, `N` none, Enter to confirm | Tick the TLs for this run |
 | TL for a file | Only if the file name has no TL. Type `TL012` or `12`, or Enter to leave blank | The TL number |
-| Folder labels | Only if a Required Assm workbook is in the folder. Build labels, work orders, paint / due dates and exceptions from it? | Yes |
+| Folder labels | KISS searches the working folder, `jobs`, the folders of your .kss files, Downloads, Desktop and Documents for `*REQUIRED ASSM*.xlsx` and lists what it finds, newest first. Pick a number, `B` to open a file picker window, or `0` to skip. You never type a path | Enter (newest file) |
 | Our job number / initials | Printed on the labels and work orders. Initials = who is making the folders | Job number, your initials |
 | Assembly filter | Limit the run to a list of assemblies? | No for a full job. Yes for a REV or partial run, then paste the list |
 | REV assemblies | Only after a filter with `R` marks. Should REV assemblies replace the same part in earlier TLs? | Yes |

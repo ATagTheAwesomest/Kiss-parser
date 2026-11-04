@@ -1945,19 +1945,15 @@ function Save-BatFile ($Name, $Lines) {
     Add-OutputFile $path
 }
 
-# Escapes text for an echo line that sits inside a ( ) block of a batch file.
-function Escape-BatchBlockText ($text) {
-    if ($null -eq $text) { return "" }
-    return ((Escape-BatchText $text) -replace '([()])', '^$1') -replace '[!"]', ''
-}
-
 # --- SELECT-AWARE SHOP SCRIPTS ---
-# One set of three scripts per run. When a script starts it lists every transmittal + sequence found in the data
-# and asks which ones are being nested NOW. It then sorts / types only the plates in those, and a plate's
-# quantity counts only the selected transmittals + sequences. $Keys: Index, TL, Seq, Parts, Qty, Text.
-# $Plates: Mark, Thick, Grade, Dets (KeyIndex, Qty per transmittal + sequence).
-function New-ShopSelectionLines ($Title, $ProjectName, $JobNumber, $Keys, $Plates, $SelFile) {
+# One set of two scripts per run (Sort-PlatesByThickness, Type-Plates). When a script starts it lists every
+# transmittal + sequence found in the data and asks which ones are being nested NOW. Only plates in those are
+# sorted / typed, and a plate's quantity counts only the selected transmittals + sequences. It then shows a
+# preview (first 5, last 5 and the 5 highest quantities) to check against other documents before anything happens.
+# $Keys: Index, TL, Seq, Parts, Qty, Text.  $Plates: Mark, Folder, Grade, Dets (KeyIndex, Qty per transmittal + sequence).
+function New-ShopSelectionLines ($Title, $ProjectName, $JobNumber, $Keys, $Plates, $SelFile, [bool]$IsSort) {
     $n = @($Keys).Count
+    $badChars = '[%!"]'
     $safeProjectHeader = Escape-BatchText $ProjectName
     $safeProject = Escape-BatchText ($ProjectName -replace '[&|<>^%]', '')
     $L = [System.Collections.Generic.List[string]]::new()
@@ -1965,21 +1961,29 @@ function New-ShopSelectionLines ($Title, $ProjectName, $JobNumber, $Keys, $Plate
     $L.Add(':: ========================================================')
     $L.Add(":: $Title")
     $L.Add(":: Project: $safeProjectHeader (Job $JobNumber)")
-    $L.Add(':: Asks which transmittals / sequences are being nested now, then only handles those.')
+    $L.Add(':: Asks which transmittals / sequences are being nested now, previews the result, then only handles those.')
     $L.Add(':: ========================================================')
     $L.Add('setlocal enabledelayedexpansion')
     $L.Add('cd /d "%~dp0"')
-    $L.Add(('set "SELFILE=%~dp0{0}"' -f ($SelFile -replace '[%!"]', '')))
+    $L.Add(('set "SELFILE=%~dp0{0}"' -f ($SelFile -replace $badChars, '')))
     $L.Add('for /f %%a in (''echo prompt $E^| cmd'') do set "ESC=%%a"')
     $L.Add('set "CY=%ESC%[96m"')
     $L.Add('set "GR=%ESC%[92m"')
     $L.Add('set "YE=%ESC%[93m"')
     $L.Add('set "DG=%ESC%[90m"')
     $L.Add('set "RS=%ESC%[0m"')
+    if ($IsSort) {
+        $L.Add(":: --- Use the 'dxf' subfolder next to this script when there is one ---")
+        $L.Add('set "WORK_DIR=%~dp0"')
+        $L.Add('if exist "%~dp0dxf\" set "WORK_DIR=%~dp0dxf\"')
+        $L.Add('cd /d "!WORK_DIR!"')
+        $L.Add('set "SUFFIX=.dxf"')
+    }
+    else { $L.Add('set "SUFFIX="') }
     $L.Add('')
     $L.Add(":: --- Every transmittal + sequence in this run: name, sequence, plate marks, plate quantity ---")
     $L.Add("set ""KEY_COUNT=$n""")
-    $badChars = '[%!"]'
+    $L.Add("set ""TOTAL_MARKS=$(@($Plates).Count)""")
     foreach ($k in $Keys) {
         $i = $k.Index
         $kTl = $k.TL -replace $badChars, ''
@@ -1999,7 +2003,7 @@ function New-ShopSelectionLines ($Title, $ProjectName, $JobNumber, $Keys, $Plate
     $L.Add('echo %CY%========================================================%RS%')
     $L.Add('echo.')
     $L.Add('echo   Which transmittals / sequences are you nesting NOW?')
-    $L.Add('echo   Only these are sorted / typed, and a part''s quantity counts only these.')
+    $L.Add('echo   Only these are handled, and a part''s quantity counts only these.')
     $L.Add('echo.')
     foreach ($k in $Keys) {
         $kText = Escape-BatchText ($k.Text -replace $badChars, '')
@@ -2031,16 +2035,36 @@ function New-ShopSelectionLines ($Title, $ProjectName, $JobNumber, $Keys, $Plate
     $L.Add('echo   %YE%Nesting now:%RS%')
     $L.Add("for /l %%k in (1,1,$n) do if defined SEL_%%k echo     - !KEY_%%k_TEXT!")
 
-    # Count the distinct plate marks that fall in the selection
+    # Collect the plates that fall in the selection (A-Z), each with its quantity from the selected keys only
     $L.Add('set "PARTS=0"')
     foreach ($p in $Plates) {
+        $mark = $p.Mark -replace $badChars, ''
+        $grade = $p.Grade -replace $badChars, ''
+        $keysText = ((ConvertTo-SendKeysText $p.Grade) -replace '!', '' -replace '"', '') -replace '%', '%%'
         $L.Add('set "HIT="')
-        foreach ($d in $p.Dets) { $L.Add("if defined SEL_$($d.KeyIndex) set ""HIT=1""") }
-        $L.Add('if defined HIT set /a PARTS+=1')
+        $L.Add('set /a Q=0')
+        $L.Add('set "DETAIL="')
+        foreach ($d in $p.Dets) {
+            $L.Add("if defined SEL_$($d.KeyIndex) (")
+            $L.Add('    set "HIT=1"')
+            $L.Add("    set /a Q+=$($d.Qty)")
+            $L.Add("    set ""DETAIL=!DETAIL! !KEY_$($d.KeyIndex)_TL!/!KEY_$($d.KeyIndex)_SEQ!:$($d.Qty)""")
+            $L.Add(')')
+        }
+        $L.Add('if defined HIT (')
+        $L.Add('    set /a PARTS+=1')
+        $L.Add("    set ""P_!PARTS!_MARK=$mark""")
+        $L.Add("    set ""P_!PARTS!_THK=$($p.Folder)""")
+        $L.Add("    set ""P_!PARTS!_GRD=$grade""")
+        $L.Add("    set ""P_!PARTS!_KEYS=$keysText""")
+        $L.Add('    set "P_!PARTS!_QTY=!Q!"')
+        $L.Add('    set "P_!PARTS!_DET=!DETAIL!"')
+        $L.Add(')')
     }
+    $L.Add('set /a OTHERS=TOTAL_MARKS-PARTS')
     $L.Add('echo.')
-    $L.Add('echo   Plate marks in this selection: !PARTS!      Plate quantity: !QSEL!')
-    $L.Add('echo   %DG%Marks that only belong to other transmittals / sequences are left alone.%RS%')
+    $L.Add('echo   Plate marks in this selection: !PARTS!      Plate quantity: !QSEL!      Left alone: !OTHERS!')
+    $L.Add('call :preview')
     $L.Add('echo.')
     $L.Add('set "OK="')
     $L.Add('set /p "OK=%GR%[Enter]%RS% continue   %GR%[R]%RS% pick again: "')
@@ -2049,7 +2073,8 @@ function New-ShopSelectionLines ($Title, $ProjectName, $JobNumber, $Keys, $Plate
     return $L
 }
 
-function New-ShopPickLines ($KeyCount) {
+# Subroutines shared by both scripts. Placed after the main flow.
+function New-ShopRoutineLines ($KeyCount, [bool]$IsSort) {
     $L = [System.Collections.Generic.List[string]]::new()
     $L.Add('exit /b 0')
     $L.Add('')
@@ -2077,43 +2102,97 @@ function New-ShopPickLines ($KeyCount) {
     $L.Add(')')
     $L.Add('if not defined FOUND echo   %YE%Not recognised, skipped: !TOK!%RS%')
     $L.Add('exit /b 0')
-    return $L
-}
-
-function New-ShopHitLines ($Plate, $WithQty) {
-    # Sets HIT when the plate is in the selection; with $WithQty also totals Q and builds DETAIL (only selected ones count)
-    $L = [System.Collections.Generic.List[string]]::new()
-    $L.Add('set "HIT="')
-    if ($WithQty) { $L.Add('set /a Q=0'); $L.Add('set "DETAIL="') }
-    foreach ($d in $Plate.Dets) {
-        $L.Add("if defined SEL_$($d.KeyIndex) (")
-        $L.Add('    set "HIT=1"')
-        if ($WithQty) {
-            $L.Add("    set /a Q+=$($d.Qty)")
-            $L.Add("    set ""DETAIL=!DETAIL! !KEY_$($d.KeyIndex)_TL!/!KEY_$($d.KeyIndex)_SEQ!:$($d.Qty)""")
-        }
-        $L.Add(')')
+    $L.Add('')
+    $L.Add(':: --- Preview: first 5, last 5 and the 5 highest quantities of the selection ---')
+    $L.Add(':preview')
+    $L.Add('echo.')
+    $L.Add('echo   %YE%Preview - check these against your other documents%RS%')
+    $L.Add('echo.')
+    $L.Add('echo   %YE%First 5%RS%')
+    $L.Add('call :rowhead')
+    $L.Add('set /a E=5')
+    $L.Add('if !PARTS! LSS 5 set /a E=PARTS')
+    $L.Add('for /l %%i in (1,1,!E!) do call :row %%i')
+    $L.Add('if !PARTS! GTR 5 (')
+    $L.Add('    echo.')
+    $L.Add('    echo   %YE%Last 5%RS%')
+    $L.Add('    call :rowhead')
+    $L.Add('    set /a S=PARTS-4')
+    $L.Add('    if !S! LSS 6 set /a S=6')
+    $L.Add('    for /l %%i in (!S!,1,!PARTS!) do call :row %%i')
+    $L.Add(')')
+    $L.Add('echo.')
+    $L.Add('echo   %YE%5 highest quantities%RS%')
+    $L.Add('call :rowhead')
+    $L.Add('for /l %%i in (1,1,!PARTS!) do set "U_%%i="')
+    $L.Add('set "N=0"')
+    $L.Add(':topnext')
+    $L.Add('set "BEST=0"')
+    $L.Add('set "BQ=-1"')
+    $L.Add('for /l %%i in (1,1,!PARTS!) do if not defined U_%%i if !P_%%i_QTY! GTR !BQ! (set "BQ=!P_%%i_QTY!" & set "BEST=%%i")')
+    $L.Add('if !BEST!==0 exit /b 0')
+    $L.Add('set "U_!BEST!=1"')
+    $L.Add('call :row !BEST!')
+    $L.Add('set /a N+=1')
+    $L.Add('if !N! LSS 5 goto :topnext')
+    $L.Add('exit /b 0')
+    $L.Add('')
+    $L.Add(':rowhead')
+    $L.Add('echo   %DG%Mark                 Thick.        Qty  Grade%RS%')
+    $L.Add('exit /b 0')
+    $L.Add('')
+    $L.Add(':row')
+    $L.Add('set "R1=!P_%~1_MARK!!SUFFIX!                         "')
+    $L.Add('set "R2=!P_%~1_THK!          "')
+    $L.Add('set "R3=         !P_%~1_QTY!"')
+    $L.Add('set "R5="')
+    if ($IsSort) {
+        $L.Add('if exist "!P_%~1_MARK!.dxf" (set "R5=%GR%found%RS%") else (set "R5=%YE%NOT FOUND%RS%")')
     }
+    $L.Add('echo   !R1:~0,20! !R2:~0,8! !R3:~-8!  !P_%~1_GRD!  !R5!')
+    $L.Add('exit /b 0')
     return $L
 }
 
-function New-TypeMacroLines ($Title, $Noun, $ValueLabel, $Keys, $Plates, $ProjectName, $JobNumber, $SelFile) {
+function New-TypeMacroLines ($Keys, $Plates, $ProjectName, $JobNumber, $SelFile) {
     $safeProject = Escape-BatchText ($ProjectName -replace '[&|<>^%]', '')
-    $isQty = ($ValueLabel -eq "Qty")
-    $lines = New-ShopSelectionLines "Auto-Type $Title" $ProjectName $JobNumber $Keys $Plates $SelFile
+    $lines = New-ShopSelectionLines "Auto-Type Plate Quantities / Grades" $ProjectName $JobNumber $Keys $Plates $SelFile $false
+    $lines.Add(':choose')
+    $lines.Add('echo.')
+    $lines.Add('echo   What do you want to type?')
+    $lines.Add('echo   %GR%[Q]%RS% Quantities')
+    $lines.Add('echo   %GR%[G]%RS% Grades')
+    $lines.Add('echo   %GR%[X]%RS% Exit')
+    $lines.Add('set "WHAT="')
+    $lines.Add('set /p "WHAT=%GR%Choice:%RS% "')
+    $lines.Add('if /i "!WHAT!"=="X" exit /b 0')
+    $lines.Add('if /i "!WHAT!"=="Q" (')
+    $lines.Add('    set "KIND=Quantities"')
+    $lines.Add('    set "NOUN=quantity"')
+    $lines.Add('    goto :go')
+    $lines.Add(')')
+    $lines.Add('if /i "!WHAT!"=="G" (')
+    $lines.Add('    set "KIND=Grades"')
+    $lines.Add('    set "NOUN=grade"')
+    $lines.Add('    goto :go')
+    $lines.Add(')')
+    $lines.Add('goto :choose')
+    $lines.Add('')
+    $lines.Add(':go')
     $lines.Add(":: ========================================================")
     $lines.Add(":: Instructions:")
     $lines.Add("::   1. Open your target software window.")
-    $lines.Add("::   2. Click and select the FIRST $Noun cell at the top.")
+    $lines.Add("::   2. Click and select the FIRST cell at the top.")
     $lines.Add("::   3. Press any key here to start the 5-second countdown.")
     $lines.Add(":: ========================================================")
+    $lines.Add('echo.')
     $lines.Add("echo ========================================================")
-    $lines.Add("echo   Auto-Type $Title Macro (A-Z Order, selected only)")
+    $lines.Add('echo   Auto-Type !KIND! (A-Z order, selected only)')
     $lines.Add("echo   Project: $safeProject (Job $JobNumber)")
     $lines.Add('echo   Total items to type: !PARTS!')
     $lines.Add("echo ========================================================")
     $lines.Add("echo.")
-    $lines.Add("echo WARNING: Position your cursor on the first $Noun cell NOW.")
+    $lines.Add('echo WARNING: Position your cursor on the first !NOUN! cell NOW.')
     $lines.Add("pause")
     $lines.Add("")
     $lines.Add("echo Starting countdown...")
@@ -2121,79 +2200,66 @@ function New-TypeMacroLines ($Title, $Noun, $ValueLabel, $Keys, $Plates, $Projec
     $lines.Add("    echo   %%i seconds remaining...")
     $lines.Add("    timeout /t 1 >nul")
     $lines.Add(")")
-    $lines.Add("echo GO - typing $($Title.ToLower())...")
-    $lines.Add("")
+    $lines.Add('echo GO - typing !NOUN!s...')
     $lines.Add("powershell -NoProfile -Command `"`$wshell = New-Object -ComObject WScript.Shell; Start-Sleep -Milliseconds 300`"")
-
-    foreach ($p in $Plates) {
-        foreach ($l in (New-ShopHitLines $p $isQty)) { $lines.Add($l) }
-        $mark = Escape-BatchBlockText $p.Mark
-        $lines.Add('if defined HIT (')
-        if ($isQty) {
-            $lines.Add("    echo %GR%[TYPING]%RS% Part $mark -^> $ValueLabel !Q!   %DG%!DETAIL!%RS%")
-            $lines.Add("    powershell -NoProfile -Command `"`$wshell = New-Object -ComObject WScript.Shell; `$wshell.SendKeys('!Q!'); Start-Sleep -Milliseconds 250; `$wshell.SendKeys('{DOWN}'); Start-Sleep -Milliseconds 200`"")
-        }
-        else {
-            $sendValue = ConvertTo-SendKeysText $p.Grade
-            $lines.Add("    echo %GR%[TYPING]%RS% Part $mark -^> $ValueLabel $(Escape-BatchBlockText $p.Grade)")
-            $lines.Add("    powershell -NoProfile -Command `"`$wshell = New-Object -ComObject WScript.Shell; `$wshell.SendKeys('$sendValue'); Start-Sleep -Milliseconds 250; `$wshell.SendKeys('{DOWN}'); Start-Sleep -Milliseconds 200`"")
-        }
-        $lines.Add(')')
-    }
-
-    $lines.Add("")
-    $lines.Add("echo.")
-    $lines.Add("echo ========================================================")
-    $lines.Add("echo   Auto-Type Complete!")
-    $lines.Add("echo ========================================================")
-    $lines.Add("echo.")
-    $lines.Add("pause")
-    foreach ($l in (New-ShopPickLines @($Keys).Count)) { $lines.Add($l) }
+    $lines.Add('if "!KIND!"=="Quantities" (')
+    $lines.Add('    for /l %%i in (1,1,!PARTS!) do call :typeqty %%i')
+    $lines.Add(') else (')
+    $lines.Add('    for /l %%i in (1,1,!PARTS!) do call :typegrade %%i')
+    $lines.Add(')')
+    $lines.Add('echo.')
+    $lines.Add('echo ========================================================')
+    $lines.Add('echo   Auto-Type !KIND! Complete!')
+    $lines.Add('echo ========================================================')
+    $lines.Add('pause')
+    $lines.Add('goto :choose')
+    $lines.Add('')
+    foreach ($l in (New-ShopRoutineLines @($Keys).Count $false)) { $lines.Add($l) }
+    $lines.Add('')
+    $lines.Add(':typeqty')
+    $lines.Add('echo %GR%[TYPING]%RS% Part !P_%~1_MARK! -^> Qty !P_%~1_QTY!   %DG%!P_%~1_DET!%RS%')
+    $lines.Add("powershell -NoProfile -Command `"`$wshell = New-Object -ComObject WScript.Shell; `$wshell.SendKeys('!P_%~1_QTY!'); Start-Sleep -Milliseconds 250; `$wshell.SendKeys('{DOWN}'); Start-Sleep -Milliseconds 200`"")
+    $lines.Add('exit /b 0')
+    $lines.Add('')
+    $lines.Add(':typegrade')
+    $lines.Add('echo %GR%[TYPING]%RS% Part !P_%~1_MARK! -^> Grade !P_%~1_GRD!')
+    $lines.Add("powershell -NoProfile -Command `"`$wshell = New-Object -ComObject WScript.Shell; `$wshell.SendKeys('!P_%~1_KEYS!'); Start-Sleep -Milliseconds 250; `$wshell.SendKeys('{DOWN}'); Start-Sleep -Milliseconds 200`"")
+    $lines.Add('exit /b 0')
     return $lines
 }
 
 function New-SortScriptLines ($Keys, $Plates, $ProjectName, $JobNumber, $SelFile) {
-    $lines = New-ShopSelectionLines "DXF Plate & Sheet Sorting Utility" $ProjectName $JobNumber $Keys $Plates $SelFile
-    $lines.Add(":: --- Use the 'dxf' subfolder next to this script when there is one ---")
-    $lines.Add('set "WORK_DIR=%~dp0"')
-    $lines.Add('if exist "%~dp0dxf\" set "WORK_DIR=%~dp0dxf\"')
-    $lines.Add('cd /d "!WORK_DIR!"')
+    $lines = New-ShopSelectionLines "DXF Plate & Sheet Sorting Utility" $ProjectName $JobNumber $Keys $Plates $SelFile $true
     $lines.Add('echo.')
     $lines.Add('echo   Working in: !WORK_DIR!')
     $lines.Add('echo.')
     $lines.Add('set "MOVED_COUNT=0"')
     $lines.Add('set "MISSING_COUNT=0"')
-    $lines.Add('set "SKIPPED_COUNT=0"')
-    $lines.Add('')
-    foreach ($p in $Plates) {
-        $thickFolder = Format-ThicknessFolder $p.Thick
-        $mark = Escape-BatchBlockText $p.Mark
-        foreach ($l in (New-ShopHitLines $p $false)) { $lines.Add($l) }
-        $lines.Add('if defined HIT (')
-        $lines.Add("    if not exist ""$thickFolder\"" mkdir ""$thickFolder"" >nul 2>&1")
-        $lines.Add("    if exist ""$($p.Mark).dxf"" (")
-        $lines.Add("        move /y ""$($p.Mark).dxf"" ""$thickFolder\"" >nul 2>&1")
-        $lines.Add("        echo %GR%[SUCCESS]%RS% $mark.dxf -^> $thickFolder")
-        $lines.Add('        set /a MOVED_COUNT+=1')
-        $lines.Add('    ) else (')
-        $lines.Add("        echo %YE%[NOT FOUND]%RS% $mark.dxf")
-        $lines.Add('        set /a MISSING_COUNT+=1')
-        $lines.Add('    )')
-        $lines.Add(') else (')
-        $lines.Add('    set /a SKIPPED_COUNT+=1')
-        $lines.Add(')')
-        $lines.Add('')
-    }
+    $lines.Add('for /l %%i in (1,1,!PARTS!) do call :moveone %%i')
     $lines.Add('echo.')
     $lines.Add('echo ========================================================')
     $lines.Add('echo   Sorting Complete!')
     $lines.Add('echo   Successfully Moved: !MOVED_COUNT! file(s)')
     $lines.Add('echo   Missing / Not Found: !MISSING_COUNT! file(s)')
-    $lines.Add('echo   Left alone (not in this selection): !SKIPPED_COUNT! mark(s)')
+    $lines.Add('echo   Left alone (not in this selection): !OTHERS! mark(s)')
     $lines.Add('echo ========================================================')
     $lines.Add('echo.')
     $lines.Add('pause')
-    foreach ($l in (New-ShopPickLines @($Keys).Count)) { $lines.Add($l) }
+    foreach ($l in (New-ShopRoutineLines @($Keys).Count $true)) { $lines.Add($l) }
+    $lines.Add('')
+    $lines.Add(':moveone')
+    $lines.Add('set "M=!P_%~1_MARK!"')
+    $lines.Add('set "T=!P_%~1_THK!"')
+    $lines.Add('if not exist "!T!\" mkdir "!T!" >nul 2>&1')
+    $lines.Add('if exist "!M!.dxf" (')
+    $lines.Add('    move /y "!M!.dxf" "!T!\" >nul 2>&1')
+    $lines.Add('    echo %GR%[SUCCESS]%RS% !M!.dxf -^> !T!')
+    $lines.Add('    set /a MOVED_COUNT+=1')
+    $lines.Add(') else (')
+    $lines.Add('    echo %YE%[NOT FOUND]%RS% !M!.dxf')
+    $lines.Add('    set /a MISSING_COUNT+=1')
+    $lines.Add(')')
+    $lines.Add('exit /b 0')
     return $lines
 }
 
@@ -2227,7 +2293,7 @@ function Write-ShopScripts ($PlateRows, $ProjectName, $JobNumber, $Label) {
         $dets = @($g.Group | Group-Object { "$($_.TL)|$($_.Seq)" } | ForEach-Object {
             [PSCustomObject]@{ KeyIndex = $keyIndex[$_.Name]; Qty = [int](($_.Group | Measure-Object -Property Qty -Sum).Sum) }
         } | Sort-Object KeyIndex)
-        $plates.Add([PSCustomObject]@{ Mark = $first.Mark; Thick = (Get-DecimalThickness $first.Size); Grade = $first.Grade; Dets = $dets })
+        $plates.Add([PSCustomObject]@{ Mark = $first.Mark; Folder = (Format-ThicknessFolder (Get-DecimalThickness $first.Size)); Grade = $first.Grade; Dets = $dets })
     }
 
     Write-Host ""
@@ -2235,14 +2301,12 @@ function Write-ShopScripts ($PlateRows, $ProjectName, $JobNumber, $Label) {
     foreach ($k in $keys) { Write-Host ("  [{0}] {1}" -f $k.Index, $k.Text) }
 
     $sortName  = "Sort-PlatesByThickness - $Label.bat"
-    $qtyName   = "Type-Quantities - $Label.bat"
-    $gradeName = "Type-Grades - $Label.bat"
+    $typeName  = "Type-Plates - $Label.bat"
     $selFile   = "Shop-Selection - $Label.txt"
     Save-BatFile $sortName (New-SortScriptLines $keys $plates $ProjectName $JobNumber $selFile)
-    Save-BatFile $qtyName (New-TypeMacroLines "Quantities" "quantity" "Qty" $keys $plates $ProjectName $JobNumber $selFile)
-    Save-BatFile $gradeName (New-TypeMacroLines "Grades" "grade" "Grade" $keys $plates $ProjectName $JobNumber $selFile)
+    Save-BatFile $typeName (New-TypeMacroLines $keys $plates $ProjectName $JobNumber $selFile)
 
-    return [PSCustomObject]@{ Label = $Label; Sort = $sortName; Quantities = $qtyName; Grades = $gradeName; Keys = $keys.Count }
+    return [PSCustomObject]@{ Label = $Label; Sort = $sortName; Type = $typeName; Keys = $keys.Count }
 }
 
 function ConvertFrom-SoundwallCsv ($CsvPath, $AnchorsPerPost) {

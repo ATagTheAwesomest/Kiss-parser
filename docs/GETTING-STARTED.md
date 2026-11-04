@@ -54,13 +54,13 @@ All in the folder you ran it in:
 | `... - Filtered Assemblies.kss` | The filtered KISS file to import into Tekla. Finish stays as received; the TL goes in the cost code slot |
 | `... QPR <date-time>.xlsx` | The QPR as its own workbook (only if you said Yes) |
 | `Sort-PlatesByThickness - <TLs>.bat` | Sorts the plate DXFs into thickness folders. Keep it next to the DXF folder |
-| `Type-Quantities - <TLs>.bat`, `Type-Grades - <TLs>.bat` | Type values into ProNest. Click into the ProNest field first, as the script instructs |
+| `Type-Plates - <TLs>.bat` | Types plate quantities or grades into ProNest (you choose Q or G after the preview, and can do both one after the other). Click into the ProNest field first, as the script instructs |
 
-There is one set of these three scripts for the whole run, however many TLs you parsed. **When you start one, it asks which transmittals / sequences you are nesting now** (see section 5a).
+There is one set of these two scripts for the whole run, however many TLs you parsed. **When you start one, it asks which transmittals / sequences you are nesting now** (see section 5a).
 
 ## 5a. Using the shop scripts: pick what you are nesting
 
-Parse every TL at once, then tell the script which ones are being nested today. Start any of the three `.bat` files and you see a list like:
+Parse every TL at once, then tell the script which ones are being nested today. Start either `.bat` file and you see a list like:
 
 ```
 [1] TL1282    seq 5203     14 plate mark(s)   qty 40
@@ -69,13 +69,13 @@ Parse every TL at once, then tell the script which ones are being nested today. 
 [A] All of them
 ```
 
-Type what you are nesting now, separated by spaces or commas: numbers (`1 3`), a TL name (`TL1296` = every sequence of it) or a sequence (`5131` = that sequence in every TL). `A` picks everything. The script then shows how many plate marks and how much plate quantity that is, and waits for Enter (or `R` to pick again).
+Type what you are nesting now, separated by spaces or commas: numbers (`1 3`), a TL name (`TL1296` = every sequence of it) or a sequence (`5131` = that sequence in every TL). `A` picks everything. The script then shows how many plate marks and how much plate quantity that is, then a **preview** to check against your other documents: the first 5, the last 5 and the 5 highest-quantity plates of the selection (mark, thickness, quantity, grade; the Sort script shows the `.dxf` name and whether the file was found). Enter continues, `R` picks again.
 
 - **Sort** moves only the DXFs of plates in your selection. Everything else stays where it is.
-- **Type-Quantities** types, for each selected plate, the quantity from the selected TLs / sequences only. A plate that appears in several TLs gets the sum of the ones you picked, and each line on screen shows where the number came from (`TL1282/5203:50 TL1296/5131:100`).
-- **Type-Grades** types the grades of the selected plates only.
+- **Type-Plates** asks `[Q]` quantities or `[G]` grades. Quantities: for each selected plate, the quantity from the selected TLs / sequences only. A plate that appears in several TLs gets the sum of the ones you picked, and each line on screen shows where the number came from (`TL1282/5203:50 TL1296/5131:100`).
+  Grades: the grade of each selected plate.
 - Plates that belong only to TLs you did not pick are skipped, so the rows you type line up with only the DXFs you imported into ProNest.
-- The last answer is remembered (in `Shop-Selection - <TLs>.txt` next to the scripts), so for the second and third script press Enter to reuse it.
+- The last answer is remembered (in `Shop-Selection - <TLs>.txt` next to the scripts), so for the second script press Enter to reuse it.
 
 At the end, say Yes to open the folder.
 

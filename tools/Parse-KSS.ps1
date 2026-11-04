@@ -22,7 +22,7 @@ trap {
     Microsoft.PowerShell.Utility\Write-Host "  Something went wrong and the run stopped." -ForegroundColor Red
     Microsoft.PowerShell.Utility\Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
     Microsoft.PowerShell.Utility\Write-Host "  (script line $($_.InvocationInfo.ScriptLineNumber))" -ForegroundColor DarkGray
-    Microsoft.PowerShell.Utility\Write-Host "  Your .kss files were not changed. Take a screenshot of this window and send it to Andrew." -ForegroundColor Yellow
+    Microsoft.PowerShell.Utility\Write-Host "  Your .kss files were not changed. Take a screenshot of this window and send it to whoever maintains KISS." -ForegroundColor Yellow
     foreach ($xl in @($excel, $xlApp)) { if ($xl) { try { $xl.DisplayAlerts = $false; $xl.Quit() } catch { } } }
     Microsoft.PowerShell.Utility\Write-Host ""
     Microsoft.PowerShell.Utility\Read-Host "  Press Enter to close" | Out-Null
@@ -312,7 +312,7 @@ function Get-MaterialCategory ($shape, $partMark, $description, $size) {
         $d -match '(NUT|WASHER|BOLT|ANCHOR|ROD|STUD|FIELD|SHOP)' -or
         $m -match '^(nut|washer|bolt|anchor)' -or
         $sz -match '(NUT|WASHER|HEAVY_HEX)' -or
-        ($s -eq "" -and $sz -match '^HSB\b')) {          # loose bolt rows with no shape field (25-351 TL1340: "HSB 3/4x1-3/4 A325")
+        ($s -eq "" -and $sz -match '^HSB\b')) {          # loose bolt rows with no shape field (sample job: "HSB 3/4x1-3/4 A325")
         return "Hardware"
     }
 
@@ -541,7 +541,7 @@ function New-RequiredAssmTemplate {
     }
     . $templateScript
     Write-Section "New Required Assm workbook (blank template)"
-    Write-Host "  The file name starts with our job number, e.g.  26102 REQUIRED ASSM.xlsx  (KISS reads that number from the name)."
+    Write-Host "  The file name starts with our job number, e.g.  12345 REQUIRED ASSM.xlsx  (KISS reads that number from the name)."
     Write-Host ""
     $jobIn = (Read-Host "Our job number for the file name (Enter = TEMPLATE, rename it later)").Trim()
     if (-not $jobIn) { $jobIn = "TEMPLATE" }
@@ -4966,7 +4966,7 @@ Write-Host ""
 $qprChoice = Read-Host "Generate Quality Process Report (QPR)? [Y]es / [N]o (default: No)"
 if ($qprChoice -match '^(y|yes)$') {
     Write-Host ""
-    Write-Host "  Job name is the sheet prefix and the Job: box, e.g. '25-351' -> '25-351 - TL1282'"
+    Write-Host "  Job name is the sheet prefix and the Job: box, e.g. '12-345' -> '12-345 - TL1282'"
     $qprJobInput = Read-Host "Job name (default: $jobNumber)"
     $qprJobNumber = if ($qprJobInput) { $qprJobInput } else { $jobNumber }
 

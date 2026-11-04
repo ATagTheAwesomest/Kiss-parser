@@ -12,7 +12,7 @@ Nothing else. No Python, no extra modules, no settings to change. KISS checks th
 
 ## 2. Install
 
-1. Get the KISS folder onto the PC (clone the `Kiss-parser` repo, or copy the folder). Anywhere is fine, for example `C:\Users\<you>\Documents\Projects\Kiss-parser`.
+1. Get the KISS folder onto the PC (clone the `Kiss-parser` repo, or copy the folder). Anywhere is fine, for example `C:\Tools\Kiss-parser`.
 2. That's it. The first time you run it, KISS unblocks its own script files if Windows marked them as downloaded.
 
 ## 3. Launch
@@ -29,7 +29,7 @@ Everything KISS makes is saved in the folder you ran it in.
 
 At the first screen choose **3**. KISS asks for the job number, saves `<job> REQUIRED ASSM.xlsx` in the folder you are working in (it never overwrites an existing file) and offers to open it. Fill it in:
 
-1. **Sheet1**: replace an orange `Column#` header with the TL name (`TL1296`; a REV is `TLR1301`), then paste that TL's AFCO numbers underneath.
+1. **Sheet1**: replace an orange `Column#` header with the TL name (`TL1296`; a REV is `TLR1301`), then paste that TL's supplier assembly numbers underneath.
 2. **TL Notes**: the sequences appear on the left by themselves. In the yellow table on the right type each sequence's Paint / Details, Explanation and Due Date.
 3. **Exceptions**: paste only the ASSM numbers whose paint, explanation or due date differ from their sequence, and fill the yellow Override columns. KISS applies them to the Master BOM, work orders, labels and statistics.
 
@@ -72,7 +72,7 @@ At the end, say Yes to open the folder.
 ## 6. If something goes wrong
 
 - **Red `[X]` on the checking screen:** it says what to do. Most common: Excel isn't installed or hasn't been opened and signed in once.
-- **"Something went wrong and the run stopped":** take a screenshot of the window and send it to Andrew. Your `.kss` files are never changed.
+- **"Something went wrong and the run stopped":** take a screenshot of the window and send it to whoever maintains KISS. Your `.kss` files are never changed.
 - **A workbook name is locked:** close it in Excel and run again, or KISS saves a new copy with a time stamp.
 - **A stray Excel left running in the background:** KISS closes its own, but if it was killed mid-run, end `EXCEL.EXE` in Task Manager.
 

@@ -139,8 +139,8 @@ The Sheet1 `Explanation` row is not used. The other tabs in that workbook (excep
 
 | Line | Content |
 |---|---|
-| 1 (big) | `<our job> - <TL> - <sequence>`, e.g. `26102 - TL1296 - 5131`. On a REV (`TLR1301`) only the `R` is italic. Our job is typed at the prompt (default: leading digits of the Required Assm file name). |
-| 2 (small) | Left: `<project name> - <customer job number>` (the KSS header job number as written, e.g. `PROJECT FRONTIER - 25-351`). Right-aligned: `IS: <initials>`, the initials typed at the prompt "Initials of who is making the folders". Left blank it prints just `IS:` to hand-write (the text is `$IssuedLabel` in `Add-FolderLabelSheet`). |
+| 1 (big) | `<our job> - <TL> - <sequence>`, e.g. `12345 - TL1296 - 5131`. On a REV (`TLR1301`) only the `R` is italic. Our job is typed at the prompt (default: leading digits of the Required Assm file name). |
+| 2 (small) | Left: `<project name> - <customer job number>` (the KSS header job number as written, e.g. `SAMPLE PROJECT - 12-345`). Right-aligned: `IS: <initials>`, the initials typed at the prompt "Initials of who is making the folders". Left blank it prints just `IS:` to hand-write (the text is `$IssuedLabel` in `Add-FolderLabelSheet`). |
 | 3 | Left (11 pt, comments / paint info): the sequence's `Paint / Details` from `TL Notes`, blank if none. On a REV (`TLR####`) label it starts with `REVISES TL1296` (several: `REVISES TL1296, TL1313`): the transmittals in the Required Assm workbook that hold any of the same assembly numbers (digits only, so an `R` prefix is ignored) within that sequence. Other REV transmittals are listed only when no non-REV one matches. Paint text follows after ` - `. Right-aligned (18 pt bold): `DUE <m/d/yy>` from the `TL Notes` due date, or the placeholder `DUE    /    /` to fill in later. |
 
 Every label cell has a thin black border on all four edges (merged cells are outlined as a whole), on both label tabs. 
@@ -189,7 +189,7 @@ Reads a post schedule with `Import-Csv`. Required column: `Post ID` (rows withou
 11. The script file is about 150 KB with Excel layout code making up most of it; the actual parsing is roughly lines 1,380–1,480 (KSS) and 966–1,115 (Soundwall).
 12. **Transmittal placement.** The filtered `.kss` keeps Finish/coating (field 10) as received and carries the TL in field 13 (cost code / pay category), replacing the cost code value from the detailer. The drawing revision (field 2) and fields 12+ are passed through. `-TransmittalInFinish` restores the old behavior (TL written over Finish, revision forced to `0`). Filtered files made by older versions still have the TL in field 10; re-run them from the original `.kss`.
 
-## 9. Open questions for Andrew
+## 9. Open questions
 
 - Which companies' KSS files does the shop receive, and do they always follow the layout above? Do any ever contain `L` lines?
 - Is the weight behavior in gotcha 1 known and accepted (e.g. weights come from elsewhere), or a bug to fix?

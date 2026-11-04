@@ -19,7 +19,7 @@ software) into the shop's working documents.
 
 | File | What it does |
 | --- | --- |
-| `tools/Parse-KSS.ps1` | The KISS engine, one file. Opens a centered main menu (build the job paperwork, soundwall CSV, write a blank Required Assm workbook, guide, quit); the blank Required Assm workbook is embedded in it. Reads the `.kss` files (or a soundwall post-schedule CSV) in the current folder and writes the BOM workbook, filtered `.kss` files, an optional QPR (also added as tabs in the BOM workbook, one per TL or TL + sequence), a `Folder Labels` tab (Dymo 3.5 x 1.125 in, one label per transmittal and sequence) when a Required Assm workbook is present (its `Exceptions` tab, ASSM-specific paint / explanation / due date, is applied on the Master BOM, Sequence Notes, work orders and labels via an `Assembly Exceptions` tab), a `TERRA Work Order` tab (letter pages, one work order per sequence, with item list, weights and totals; paint notes come from the Required Assm TL Notes tab, else NO PAINT), and per-TL shop scripts: `Sort-PlatesByThickness` (sorts plate DXFs into thickness folders), `Type-Quantities` and `Type-Grades` (type values into ProNest). |
+| `tools/Parse-KSS.ps1` | The KISS engine, one file. Opens a centered main menu (build the job paperwork, soundwall CSV, write a blank Required Assm workbook, guide, quit); the blank Required Assm workbook is embedded in it. Reads the `.kss` files (or a soundwall post-schedule CSV) in the current folder and writes the BOM workbook, filtered `.kss` files, an optional QPR (also added as tabs in the BOM workbook, one per TL or TL + sequence), a `Folder Labels` tab (Dymo 3.5 x 1.125 in, one label per transmittal and sequence) when a Required Assm workbook is present (its `Exceptions` tab can apply ASSM-specific paint, explanation and due-date overrides, which flow into the Master BOM, Sequence Notes, work orders and labels via an `Assembly Exceptions` tab), and a `TERRA Work Order` tab (letter pages, one work order per sequence, with item list, weights and totals; paint notes come from the Required Assm TL Notes tab, else NO PAINT). It creates one set of shop scripts for the whole run: `Sort-PlatesByThickness` (sorts plate DXFs into thickness folders) and `Type-Plates` (types quantities or grades into ProNest; you choose which). Each script asks which transmittals / sequences you are nesting now, shows a preview (first 5, last 5, 5 highest quantities), and only sorts / types the selected ones, with quantities counted for just those. |
 | `tools/verify-whitelist.ps1` | Tests an assembly whitelist on its own, using the same parser as the engine. |
 
 ## Needs
@@ -46,7 +46,7 @@ Quality Process Report: each sheet is named `{job} - {TL}`, or `{job} - {TL} - {
 2. Double-click `Start-KISS.bat` (runs in `jobs/`), or drag the job's folder onto it. By hand: in that folder, `powershell -ExecutionPolicy Bypass -File <path to KISS>\tools\Parse-KSS.ps1`
 3. Answer the prompts: data source, which files and TLs, optional folder labels (needs a `... REQUIRED ASSM.xlsx` in the
    folder, see [PARSING.md](docs/PARSING.md) section 6a), optional assembly whitelist, rev overrides,
-   duplicates, shop script grouping, QPR. Details in [docs/PARSING.md](docs/PARSING.md).
+   duplicates, QPR. (The shop scripts ask later, when you run them, which TLs / sequences you are nesting.) Details in [docs/PARSING.md](docs/PARSING.md).
 
 Outputs are written to the folder the script runs in. The generated `.bat` files find their DXF folder
 relative to themselves, so keep them with the job files.

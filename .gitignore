@@ -10,6 +10,7 @@
 Sort-PlatesByThickness*.bat
 Type-Quantities*.bat
 Type-Grades*.bat
+Type-Plates*.bat
 *.log
 captures/
 dxf/

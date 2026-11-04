@@ -25,6 +25,16 @@ Double-click **`Start-KISS.bat`** in the KISS folder.
 
 Everything KISS makes is saved in the folder you ran it in.
 
+### Starting a new job: the blank Required Assm workbook
+
+At the first screen choose **3**. KISS asks for the job number, saves `<job> REQUIRED ASSM.xlsx` in the folder you are working in (it never overwrites an existing file) and offers to open it. Fill it in:
+
+1. **Sheet1**: replace an orange `Column#` header with the TL name (`TL1296`; a REV is `TLR1301`), then paste that TL's AFCO numbers underneath.
+2. **TL Notes**: the sequences appear on the left by themselves. In the yellow table on the right type each sequence's Paint / Details, Explanation and Due Date.
+3. **Exceptions**: paste only the ASSM numbers whose paint, explanation or due date differ from their sequence, and fill the yellow Override columns. KISS applies them to the Master BOM, work orders, labels and statistics.
+
+Keep the file in the job folder next to the `.kss` files; KISS finds it by its name. It needs the Microsoft 365 version of Excel.
+
 ## 4. The screens, in order
 
 Press **Enter** to take the answer shown as `(default)`. Some screens only appear when they apply.
@@ -32,10 +42,10 @@ Press **Enter** to take the answer shown as `(default)`. Some screens only appea
 | Screen | What it asks | Normal answer |
 | --- | --- | --- |
 | Checking this computer | Nothing. Shows green `[OK]` lines. A red `[X]` line says what to fix. | Just read it |
-| Data source | `1` = KSS files, `2` = soundwall CSV | Enter (KSS) |
+| Data source | `1` = KSS files, `2` = soundwall CSV, `3` = new blank Required Assm workbook | Enter (KSS) |
 | Select KSS files | Up/Down to move, Space to tick, `A` all, `N` none, Enter to confirm | Tick the TLs for this run |
 | TL for a file | Only if the file name has no TL. Type `TL012` or `12`, or Enter to leave blank | The TL number |
-| Folder labels | Only if a Required Assm workbook is in the folder. Build labels and work orders from it? | Yes |
+| Folder labels | Only if a Required Assm workbook is in the folder. Build labels, work orders, paint / due dates and exceptions from it? | Yes |
 | Our job number / initials | Printed on the labels and work orders. Initials = who is making the folders | Job number, your initials |
 | Assembly filter | Limit the run to a list of assemblies? | No for a full job. Yes for a REV or partial run, then paste the list |
 | REV assemblies | Only after a filter with `R` marks. Should REV assemblies replace the same part in earlier TLs? | Yes |

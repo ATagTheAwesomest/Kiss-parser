@@ -131,9 +131,9 @@ Needs a `*REQUIRED ASSM*.xlsx` in the run folder (git-ignored like every other j
 | `TL Name` (header) | Transmittal, e.g. `TL1296`. A REV is `TLR1301` and keeps the `R` on the label. Columns that are not named `TL#### / TLR####`, or that hold no assembly numbers, are ignored. |
 | Rows under the header | AFCO assembly numbers. The first 4 digits are the sequence (an `R` prefix is ignored). Each unique sequence in a column gets its own label (line 1). |
 
-**Coating and due date come from the `TL Notes` tab** ("Sequence Details Register"), which is keyed by 4-digit sequence: columns `Sequence`, `Paint / Details`, `Explanation`, `Due Date`. Each label takes its own sequence's `Paint / Details` (line 3, left) and `Due Date` (line 3, right, as `DUE <date>`); real dates are shown as `M/d/yy`, text as typed, blank = left out. `Explanation` is not used. The tab holds the yellow input table plus a formula-spilled copy; the first non-blank value per sequence is used.
+**Coating and due date come from the `TL Notes` tab** ("Sequence Details Register"), which is keyed by 4-digit sequence: columns `Sequence`, `Paint / Details`, `Explanation`, `Due Date`. Each label takes its own sequence's `Paint / Details` (line 3, left) and `Due Date` (line 3, right, as `DUE <date>`); real dates are shown as `M/d/yy`, text as typed, blank = left out. `Explanation` is read too (it feeds the Master BOM `Explanation` column and the Exceptions defaults below). The tab holds the yellow input table plus a formula-spilled copy; the first non-blank value per sequence is used.
 
-The Sheet1 `Explanation` row is not used. The other tabs in that workbook are formulas over Sheet1 and are not read.
+The Sheet1 `Explanation` row is not used. The other tabs in that workbook (except `TL Notes` and `Exceptions`) are formulas over Sheet1 and are not read.
 
 **One label per TL and sequence** (one per folder), sorted by TL number, then sequence. If KSS files were selected for the run, only transmittals matching a selected file's TL number get a label (`TL1301.kss` matches `TLR1301`); skipped ones are reported in yellow.
 
@@ -149,6 +149,26 @@ Every label cell has a thin black border on all four edges (merged cells are out
 
 **`TL Labels` tab:** built automatically right after `Folder Labels` from the same data (no extra prompt), one 3.5 x 1.125 in label per transmittal, ordered by TL number, with the same print setup (margins 0, fit all columns on one page, a page break between labels). Rows: (1) the transmittal big and centered, e.g. `TL1296`; (2) that transmittal's sequences big, side by side and evenly spread (a 12-column grid, so 1 to 6 sequences share the width; more than 6 shrink to fit); (3) under each sequence its `DUE <m/d/yy>` from `TL Notes` in small type, or `DUE    /    /` when none. A REV (`TLR1301`) is different: the `R` is italic and the right third of row 1 carries a small `REVISES TL1296`, found the same way as on the Folder Labels tab (union over the REV's sequences). Our job number and the customer job are not on this tab.
 Assumptions: the due date text is used as typed in the sheet (real dates are shown as `M/d/yy`); coating comes only from the `Paint / TL Details` row, not from the KSS Finish field.
+
+## 6b. ASSM exceptions (Required Assm `Exceptions` tab)
+
+The Required Assm workbook's `Exceptions` tab lists individual assemblies (ASSM numbers) whose **Paint / Details**, **Explanation** or **Due Date** differ from the default of their sequence on the `TL Notes` tab. The tab itself computes the matched transmittal(s), the sequence (first 4 digits), the defaults and the effective values; KISS reads only what is typed: the `ASSM Number` column and the three yellow **Override** columns. An ASSM with no override filled in "uses default" and is ignored. If the same ASSM is listed twice the last row wins (yellow warning). Quantities, sequences, REV placement, weights and the filtered `.kss` are not affected: an exception changes paint / due / explanation only.
+
+Effective value for an assembly = its override if one is set, else the sequence default. What uses it:
+
+| Where | Effect |
+|---|---|
+| `Assembly Exceptions` tab (new, built after `Sequence Notes`) | One row per exception ASSM that is in the run, with the transmittal it is placed on (a REV'd assembly shows `TLR####`), its sequence, the default (formula into `Sequence Notes`), the override (yellow, editable) and the effective paint / explanation / due. ASSMs on the Exceptions tab that are not in the run are listed at the bottom as `Not in this run: <reason>` (their transmittal's `.kss` was not selected, or the assembly filter left them out, or they are not in Sheet1) and also reported in yellow on screen. |
+| Master BOM | `Due Date` and `Paint / Notes` take the effective value for exception assemblies; new columns `Explanation` (AD) and `Exception` (AE, `EXCEPTION` on the flagged rows) appear when the run has exceptions. Other assemblies follow their folder, as before. |
+| TERRA Work Order | The item's NOTES cell shows its effective paint (e.g. `NO PAINT` inside a `GREY PAINT` sequence), plus ` - <explanation>` when the exception has its own, plus ` - DUE <date>` when its due date differs from the work order's date. The work order header (one per transmittal and sequence) is unchanged. |
+| `Sequence Notes`, Folder Labels, QPR (sequence sheets) | New columns `Exception ASSMs` (count in that folder) and `Exception Paint` (effective paint of the first one). The Label Notes text appends them: `GREY PAINT - 12 ASSM NO PAINT`. Folders and labels are not split; the shop sees from the label that some pieces differ and from the work order which ones. |
+| Statistics | Headlines `Assemblies with exceptions` and `Exception ASSMs not in this run`. |
+
+Interpretation to confirm: an exception changes how an assembly is treated, not which folder it is in. If an exception is meant to move an assembly to a different folder or work order, that is not done today.
+
+## 6c. Making a blank Required Assm workbook
+
+At the first screen choose **3** (`New blank Required Assm workbook`). KISS asks for our job number, writes `<job> REQUIRED ASSM.xlsx` (or `TEMPLATE REQUIRED ASSM.xlsx`) in the working folder (never overwriting an existing file) and offers to open it. The workbook has every tab (`Sheet1`, `Table1 Transposed`, `Sequences in Each TL`, `Sequences by TL`, `TL Notes`, `Exceptions`) with all formulas, tables and formatting and no data; `Sheet1` starts with empty `Column1`..`Column20` headers. The file is embedded in `tools/RequiredAssmTemplate.ps1` (base64), so no Excel is needed to write it, only to fill it in. It needs Microsoft 365 Excel (the tabs use LET / LAMBDA / BYCOL / FILTER). To change the template, open a written copy, edit it, and re-embed the saved `.xlsx` as base64 in that file.
 
 ## 7. Soundwall CSV mode
 

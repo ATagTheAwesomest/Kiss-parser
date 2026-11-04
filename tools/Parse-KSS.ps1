@@ -311,7 +311,8 @@ function Get-MaterialCategory ($shape, $partMark, $description, $size) {
     if ($s -match '^(HS|MB|AB|WA|WS|NUT|WASHER|BOLT)$' -or 
         $d -match '(NUT|WASHER|BOLT|ANCHOR|ROD|STUD|FIELD|SHOP)' -or
         $m -match '^(nut|washer|bolt|anchor)' -or
-        $sz -match '(NUT|WASHER|HEAVY_HEX)') {
+        $sz -match '(NUT|WASHER|HEAVY_HEX)' -or
+        ($s -eq "" -and $sz -match '^HSB\b')) {          # loose bolt rows with no shape field (25-351 TL1340: "HSB 3/4x1-3/4 A325")
         return "Hardware"
     }
 
@@ -467,7 +468,7 @@ function Select-RequiredAssmFile {
     if ($files.Count -eq 1) {
         Write-Host "Files: $($files[0].Name)"
         Write-Host ""
-        Write-Host "  [Y] Yes (default): add a 'Folder Labels' tab, one 3.5x1.125 label per transmittal and sequence"
+        Write-Host "  [Y] Yes (default): labels, work orders, paint / due dates and the Exceptions tab from this file"
         Write-Host "  [N] No: skip the labels"
         $choice = Read-Host "Build folder labels from this file? [Y]es / [N]o (default: Yes)"
         if ($choice -match '^(n|no)$') { return $null }
@@ -483,6 +484,85 @@ function Select-RequiredAssmFile {
     if ($pick -match '^\s*(\d+)\s*$') { $n = [int]$Matches[1] }
     if ($n -lt 1 -or $n -gt $files.Count) { $n = 1 }
     return $files[$n - 1].FullName
+}
+
+# Date cells come back from Excel as OLE doubles; typed text is kept as typed.
+function ConvertTo-DueText ($d) {
+    if ($d -is [double]) { return [DateTime]::FromOADate($d).ToString('M/d/yy') }
+    return ("$d").Trim()
+}
+
+# "Exceptions" tab of the Required Assm workbook: ASSM-specific overrides of the sequence's Paint / Details, Explanation
+# and Due Date. $Vals is the tab's cells as a 2-D array (Excel Value2). Only the three Override columns are read
+# (the Default / Effective columns are formulas); an ASSM with no override filled in "uses default" and is ignored.
+# Returns @{ Map = digits -> { Assembly; Paint; Explanation; DueDate }; Duplicates = digits listed more than once }.
+function Read-ExceptionsFromArray ($Vals) {
+    $map = @{}
+    $dups = [System.Collections.Generic.List[string]]::new()
+    if ($Vals -isnot [System.Array] -or $Vals.Rank -ne 2) { return [PSCustomObject]@{ Map = $map; Duplicates = @() } }
+    $r0 = $Vals.GetLowerBound(0); $r1 = $Vals.GetUpperBound(0)
+    $c0 = $Vals.GetLowerBound(1); $c1 = $Vals.GetUpperBound(1)
+    $hr = -1; $asmCol = -1
+    for ($r = $r0; $r -le $r1 -and $hr -lt 0; $r++) {
+        for ($c = $c0; $c -le $c1; $c++) {
+            if (("$($Vals[$r, $c])").Trim() -match '^(?i)ASSM(\s*Number)?$') { $hr = $r; $asmCol = $c; break }
+        }
+    }
+    if ($hr -lt 0) { return [PSCustomObject]@{ Map = $map; Duplicates = @() } }
+    $paintCol = -1; $explCol = -1; $dueCol = -1
+    for ($c = $c0; $c -le $c1; $c++) {
+        $h = ("$($Vals[$hr, $c])").Trim()
+        if ($h -match '(?i)^override\s*paint|^override\s*coating') { $paintCol = $c }
+        elseif ($h -match '(?i)^override\s*expl') { $explCol = $c }
+        elseif ($h -match '(?i)^override\s*due') { $dueCol = $c }
+    }
+    for ($r = $hr + 1; $r -le $r1; $r++) {
+        $digits = ("$($Vals[$r, $asmCol])").Trim() -replace '\D', ''     # drops an R (REV) prefix and anything else
+        if ($digits.Length -lt 4) { continue }
+        $paint = ""; $expl = ""; $due = ""
+        if ($paintCol -ge 0 -and $null -ne $Vals[$r, $paintCol]) { $paint = ("$($Vals[$r, $paintCol])").Trim() }
+        if ($explCol -ge 0 -and $null -ne $Vals[$r, $explCol]) { $expl = ("$($Vals[$r, $explCol])").Trim() }
+        if ($dueCol -ge 0 -and $null -ne $Vals[$r, $dueCol]) { $due = ConvertTo-DueText $Vals[$r, $dueCol] }
+        if (-not $paint -and -not $expl -and -not $due) { continue }       # "Uses default"
+        if ($map.ContainsKey($digits)) { $dups.Add($digits) }               # last entry wins
+        $map[$digits] = [PSCustomObject]@{ Assembly = $digits; Paint = $paint; Explanation = $expl; DueDate = $due }
+    }
+    return [PSCustomObject]@{ Map = $map; Duplicates = @($dups) }
+}
+
+# Writes a blank Required Assm workbook (no data): the TL entry sheet, the three summary sheets, TL Notes and Exceptions,
+# with all formulas, tables and formatting. The workbook itself is embedded in tools\RequiredAssmTemplate.ps1; this needs
+# no Excel to write it, only to open it. Returns the path written, or $null.
+function New-RequiredAssmTemplate {
+    $templateScript = Join-Path $PSScriptRoot 'RequiredAssmTemplate.ps1'
+    if (-not (Test-Path -LiteralPath $templateScript)) {
+        Write-Log "Missing tools\RequiredAssmTemplate.ps1 next to Parse-KSS.ps1; cannot write the template. Re-copy the KISS folder." "Red"
+        return $null
+    }
+    . $templateScript
+    Write-Section "New Required Assm workbook (blank template)"
+    Write-Host "  The file name starts with our job number, e.g.  26102 REQUIRED ASSM.xlsx  (KISS reads that number from the name)."
+    Write-Host ""
+    $jobIn = (Read-Host "Our job number for the file name (Enter = TEMPLATE, rename it later)").Trim()
+    if (-not $jobIn) { $jobIn = "TEMPLATE" }
+    $jobIn = $jobIn -replace '[\\/:*?"<>|]', '_'
+    $path = Join-Path (Get-Location).Path "$jobIn REQUIRED ASSM.xlsx"
+    if (Test-Path -LiteralPath $path) {
+        $path = Join-Path (Get-Location).Path ("$jobIn REQUIRED ASSM {0}.xlsx" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        Write-Log "That file already exists; writing a new copy instead so nothing is overwritten." "Yellow"
+    }
+    [System.IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($script:RequiredAssmTemplateBase64))
+    Write-Log "Wrote $path" "Green"
+    Write-Host ""
+    Write-Host "  How to fill it in:" -ForegroundColor Yellow
+    Write-Host "    Sheet1 ........ replace an orange Column# header with the TL name (TL1296, REV = TLR1301), then paste its AFCO numbers below it."
+    Write-Host "    TL Notes ...... sequences appear on the left by themselves; type paint / explanation / due date in the yellow table on the right."
+    Write-Host "    Exceptions .... paste only the ASSM numbers whose paint, explanation or due date differ from their sequence; fill the yellow Override columns."
+    Write-Host "  Needs Microsoft 365 Excel (the tabs use LET / LAMBDA / FILTER). Leave this file in the job folder; KISS finds it by its name."
+    Write-Host ""
+    $open = (Read-Host "Open it in Excel now? [Y]es / [N]o (default: Yes)").Trim()
+    if ($open -notmatch '^(n|no)$') { try { Start-Process -FilePath $path } catch { Write-Log "Could not open it: $($_.Exception.Message)" "Yellow" } }
+    return $path
 }
 
 function Read-RequiredAssm {
@@ -574,19 +654,23 @@ function Read-RequiredAssm {
             for ($hr = 1; $hr -le $nRows; $hr++) {
                 for ($hc = 1; $hc -le $nCols; $hc++) {
                     if (("$($vals[$hr, $hc])").Trim() -notmatch '^(?i)sequence$') { continue }
-                    $paintCol = 0; $dueCol = 0
+                    $paintCol = 0; $dueCol = 0; $explCol = 0
                     for ($k = $hc + 1; $k -le [Math]::Min($nCols, $hc + 6); $k++) {
                         $h = ("$($vals[$hr, $k])").Trim()
                         if ($h -match '(?i)^paint|coating') { $paintCol = $k }
+                        elseif ($h -match '(?i)^expl') { $explCol = $k }
                         elseif ($h -match '(?i)^due') { $dueCol = $k }
                     }
                     if ($paintCol -eq 0 -and $dueCol -eq 0) { continue }
                     for ($r = $hr + 1; $r -le $nRows; $r++) {
                         $seq = ("$($vals[$r, $hc])").Trim()
                         if ($seq -notmatch '^\d{4}$') { continue }
-                        if (-not $seqNotes.ContainsKey($seq)) { $seqNotes[$seq] = @{ Coating = ""; DueDate = "" } }
+                        if (-not $seqNotes.ContainsKey($seq)) { $seqNotes[$seq] = @{ Coating = ""; DueDate = ""; Explanation = "" } }
                         if ($paintCol -gt 0 -and -not $seqNotes[$seq].Coating -and $null -ne $vals[$r, $paintCol]) {
                             $seqNotes[$seq].Coating = ("$($vals[$r, $paintCol])").Trim()
+                        }
+                        if ($explCol -gt 0 -and -not $seqNotes[$seq].Explanation -and $null -ne $vals[$r, $explCol]) {
+                            $seqNotes[$seq].Explanation = ("$($vals[$r, $explCol])").Trim()
                         }
                         if ($dueCol -gt 0 -and -not $seqNotes[$seq].DueDate -and $null -ne $vals[$r, $dueCol]) {
                             $d = $vals[$r, $dueCol]
@@ -601,7 +685,26 @@ function Read-RequiredAssm {
     finally {
         $wb.Close($false)
     }
-    foreach ($tlEntry in $result) { $tlEntry | Add-Member -NotePropertyName SeqNotes -NotePropertyValue $seqNotes }
+    # ASSM-specific overrides from the "Exceptions" tab (same for every transmittal; read once)
+    $exceptions = [PSCustomObject]@{ Map = @{}; Duplicates = @() }
+    $wb = $Excel.Workbooks.Open($Path, 0, $true)
+    try {
+        foreach ($ws in $wb.Worksheets) {
+            if ($ws.Name -notmatch '(?i)^\s*Exceptions\s*$') { continue }
+            $last = $ws.Cells.SpecialCells(11)
+            $vals = $ws.Range($ws.Cells.Item(1, 1), $last).Value2
+            $exceptions = Read-ExceptionsFromArray $vals
+            break
+        }
+    }
+    finally {
+        $wb.Close($false)
+    }
+    foreach ($tlEntry in $result) {
+        $tlEntry | Add-Member -NotePropertyName SeqNotes -NotePropertyValue $seqNotes
+        $tlEntry | Add-Member -NotePropertyName Exceptions -NotePropertyValue $exceptions.Map
+        $tlEntry | Add-Member -NotePropertyName ExceptionDuplicates -NotePropertyValue $exceptions.Duplicates
+    }
     return @($result | Sort-Object Number)
 }
 
@@ -1047,6 +1150,12 @@ function Add-DashboardExtras {
             @("Folders with no date", "=COUNTIF($sR,`"NO DATE`")", "#,##0", "Folder Schedule")
         )
     }
+    if ($script:ExceptionRows.Count -gt 0 -or $script:ExceptionNotInRun.Count -gt 0) {
+        $headlines += @(
+            @("Assemblies with exceptions", "=COUNTIF(Exc_Status,`"Exception set`")", "#,##0", "Assembly Exceptions"),
+            @("Exception ASSMs not in this run", "=COUNTIF(Exc_Status,`"Not in this run*`")", "#,##0", "Assembly Exceptions")
+        )
+    }
     $r = $top + 2; $hFirst = $r
     foreach ($h in $headlines) {
         $Dashboard.Cells.Item($r, 1).Value2 = $h[0]
@@ -1104,8 +1213,34 @@ function Get-KssPartWeight ($shape, $size, $lengthStr, $qty) {
 # (key = "<TL>|<sequence>"); blank when there is no such row or the cell is empty. Goes through workbook names
 # (Seq_*, defined by Add-SequenceNotesSheet): a direct 'Sequence Notes'!F:F reference inside the Master BOM table was saved as a broken external link.
 function Get-SeqNoteRef ($Column, $KeyExpr) {
-    $name = @{ F = "Seq_Due"; G = "Seq_Paint"; H = "Seq_LabelNotes"; I = "Seq_LabelDue" }[$Column]
+    $name = @{ F = "Seq_Due"; G = "Seq_Paint"; H = "Seq_LabelNotes"; I = "Seq_LabelDue"; J = "Seq_Expl" }[$Column]
     'IFERROR(INDEX({0},MATCH({1},Seq_Key,0))&"","")' -f $name, $KeyExpr
+}
+
+# Same idea for the "Assembly Exceptions" tab (names Exc_*, defined by Add-AssemblyExceptionsSheet): the EFFECTIVE value
+# (override if one is set, else the sequence default) for the assembly whose number is KeyExpr; blank when the assembly
+# has no row there. Column: Paint | Expl | Due | Status.
+function Get-ExcRef ($Column, $KeyExpr) {
+    $name = @{ Paint = "Exc_Paint"; Expl = "Exc_Expl"; Due = "Exc_Due"; Status = "Exc_Status" }[$Column]
+    'IFERROR(INDEX({0},MATCH({1},Exc_Key,0))&"","")' -f $name, $KeyExpr
+}
+
+# NOTES cell of one work-order item: the folder's paint / notes (Sequence Notes), or for an assembly with an exception its
+# effective paint, plus " - <explanation>" and " - DUE <date>" when the exception carries them (the due only when it differs
+# from the folder's due date, which is what the work order header shows).
+function Get-WorkOrderNoteFormula ($Tl, $Sequence, $Assembly) {
+    $key = "`"$Tl|$Sequence`""
+    $paintRef = Get-SeqNoteRef "G" $key
+    $base = "IF($paintRef=`"`",IFERROR(Set_DefaultNotes,`"NO PAINT`"),$paintRef)"
+    $digits = "$Assembly" -replace '\D', ''
+    if (-not $script:AsmExceptions -or -not $script:AsmExceptions.ContainsKey($digits)) { return "=$base" }
+    $a = "`"$digits`""
+    $p = Get-ExcRef "Paint" $a; $d = Get-ExcRef "Due" $a
+    $dueSeq = Get-SeqNoteRef "F" $key
+    $text = "=IF($p<>`"`",$p,$base)"
+    # the explanation is shown only when this ASSM's exception carries its own (not the sequence's general one)
+    if ($script:AsmExceptions[$digits].Explanation) { $e = Get-ExcRef "Expl" $a; $text += "&IF($e<>`"`",`" - `"&$e,`"`")" }
+    return $text + "&IF(AND($d<>`"`",$d<>$dueSeq),`" - DUE `"&$d,`"`")"
 }
 
 # "Sequence Notes" tab: the one place to edit due date and paint/notes. One row per transmittal + sequence (after the REV move).
@@ -1120,10 +1255,11 @@ function Add-SequenceNotesSheet {
     $sheet.Range("B2:G$($n + 2)").NumberFormat = "@"       # typed dates stay text, so the labels print them as typed
     # Everything goes down in ONE array write (header row, data, formulas, note): in Windows PowerShell a single-cell Value2
     # write followed by an array write on the same sheet throws InvalidCastException.
-    $data = New-Object "object[,]" ($n + 1), 11
-    $headers = @("Key", "Transmittal", "Sequence", "Rev", "Revises", "Due Date", "Paint / Notes", "Label Notes", "Label Due")
+    # A:I as before; J = the sequence's Explanation (TL Notes tab); K:L are filled in by Add-SequenceNotesExceptionColumns when ASSM exceptions exist
+    $data = New-Object "object[,]" ($n + 1), 14
+    $headers = @("Key", "Transmittal", "Sequence", "Rev", "Revises", "Due Date", "Paint / Notes", "Label Notes", "Label Due", "Explanation")
     for ($c = 0; $c -lt $headers.Count; $c++) { $data[0, $c] = $headers[$c] }
-    $data[0, 10] = "Edit the yellow cells (Due Date, Paint / Notes). Master BOM, Folder Labels, TL Labels and TERRA Work Order follow. Blank paint prints the Settings default on work orders."
+    $data[0, 13] = "Edit the yellow cells (Due Date, Paint / Notes, Explanation). Master BOM, Folder Labels, TL Labels and TERRA Work Order follow. Blank paint prints the Settings default on work orders. ASSM-specific paint / due / explanation go on the Assembly Exceptions tab."
     for ($i = 0; $i -lt $n; $i++) {
         $r = $Rows[$i]; $x = $i + 2
         $data[($i + 1), 0] = "=B$x&`"|`"&C$x"
@@ -1135,28 +1271,134 @@ function Add-SequenceNotesSheet {
         $data[($i + 1), 6] = $r.Paint
         $data[($i + 1), 7] = "=IF(E$x<>`"`",`"REVISES `"&E$x&IF(G$x<>`"`",`" - `"&G$x,`"`"),G$x)"
         $data[($i + 1), 8] = "=IF(F$x=`"`",`"DUE    /    /`",`"DUE `"&F$x)"
+        $data[($i + 1), 9] = $r.Explanation
     }
-    $sheet.Range("A1").Resize($n + 1, 11).Value2 = $data
-    foreach ($nm in @(@("Seq_Key", "A"), @("Seq_Due", "F"), @("Seq_Paint", "G"), @("Seq_LabelNotes", "H"), @("Seq_LabelDue", "I"))) {
+    $sheet.Range("A1").Resize($n + 1, 14).Value2 = $data
+    foreach ($nm in @(@("Seq_Key", "A"), @("Seq_Due", "F"), @("Seq_Paint", "G"), @("Seq_LabelNotes", "H"), @("Seq_LabelDue", "I"), @("Seq_Expl", "J"))) {
         [void]$Workbook.Names.Add($nm[0], "='Sequence Notes'!`$$($nm[1]):`$$($nm[1])")
     }
     if ($n -gt 0) {
         $sheet.Range("F2:G$($n + 1)").Interior.Color = Get-OleColor 255 242 204     # inputs
+        $sheet.Range("J2:J$($n + 1)").Interior.Color = Get-OleColor 255 242 204
         $sheet.Range("A2:A$($n + 1)").Font.Color = Get-OleColor 128 128 128
         $sheet.Range("H2:I$($n + 1)").Font.Color = Get-OleColor 128 128 128
     }
-    $hdr = $sheet.Range("A1:I1")
+    $hdr = $sheet.Range("A1:J1")
     $hdr.Font.Bold = $true
     $hdr.Font.Color = Get-OleColor 255 255 255
     $hdr.Interior.Color = Get-OleColor 27 54 93
-    $sheet.Range("K1").Font.Italic = $true
-    $widths = [double[]]@(16, 14, 10, 7, 22, 14, 44, 44, 16)   # doubles: the COM binder caches the first ColumnWidth argument type and later double writes would fail
+    $sheet.Range("N1").Font.Italic = $true
+    $widths = [double[]]@(16, 14, 10, 7, 22, 14, 44, 44, 16, 30)   # doubles: the COM binder caches the first ColumnWidth argument type and later double writes would fail
     for ($c = 0; $c -lt $widths.Count; $c++) { $sheet.Columns.Item($c + 1).ColumnWidth = $widths[$c] }
-    [void]$sheet.Range("A1:I$($n + 1)").AutoFilter()
+    [void]$sheet.Range("A1:J$($n + 1)").AutoFilter()
     $sheet.Activate()
     $Workbook.Application.ActiveWindow.SplitRow = 1
     $Workbook.Application.ActiveWindow.FreezePanes = $true
     return $sheet
+}
+
+# "Assembly Exceptions" tab: ASSM-specific overrides of the sequence's paint / explanation / due date, read from the Required
+# Assm workbook's Exceptions tab. One row per exception ASSM that is in this run (Rows: Assembly, TL, Sequence, Paint,
+# Explanation, DueDate = the overrides), then the ones that are not (NotInRun: Assembly, Paint, Explanation, DueDate, Why).
+# Defaults and effective values are formulas (sequence default from Sequence Notes; override else default), so editing an
+# override (yellow) updates the Master BOM, work orders, labels and statistics. Defines Exc_Key / Exc_FolderKey / Exc_Paint /
+# Exc_Expl / Exc_Due / Exc_Status. Must be built after the Sequence Notes tab.
+function Add-AssemblyExceptionsSheet {
+    param($Workbook, $Rows, $NotInRun)
+
+    $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
+    $sheet.Name = "Assembly Exceptions"
+    $sheet.Cells.Font.Name = "Arial"
+    $rows = @($Rows); $nIn = $rows.Count
+    $outs = @($NotInRun); $nOut = $outs.Count
+    $total = $nIn + $nOut
+    $sheet.Range("A2:C$($total + 2)").NumberFormat = "@"       # not D: the Folder Key column holds a formula, which a Text cell would keep as text
+    $sheet.Range("H2:J$($total + 2)").NumberFormat = "@"      # typed dates stay text, same as Sequence Notes
+    # One array write for everything (see Add-SequenceNotesSheet)
+    $data = New-Object "object[,]" ($total + 1), 16
+    $headers = @("Assembly", "Transmittal", "Sequence", "Folder Key", "Default Paint / Notes", "Default Explanation", "Default Due Date",
+                 "Override Paint / Notes", "Override Explanation", "Override Due Date", "Effective Paint / Notes", "Effective Explanation", "Effective Due Date", "Status")
+    for ($c = 0; $c -lt $headers.Count; $c++) { $data[0, $c] = $headers[$c] }
+    $data[0, 15] = "Overrides come from the Required Assm Exceptions tab (edit the yellow cells here to change them). A blank override uses the sequence default from the Sequence Notes tab. Master BOM, TERRA Work Order and Folder Labels follow."
+    for ($i = 0; $i -lt $nIn; $i++) {
+        $r = $rows[$i]; $x = $i + 2
+        $data[($i + 1), 0] = $r.Assembly
+        $data[($i + 1), 1] = $r.TL
+        $data[($i + 1), 2] = $r.Sequence
+        $data[($i + 1), 3] = "=B$x&`"|`"&C$x"
+        $data[($i + 1), 4] = "=" + (Get-SeqNoteRef "G" "D$x")
+        $data[($i + 1), 5] = "=" + (Get-SeqNoteRef "J" "D$x")
+        $data[($i + 1), 6] = "=" + (Get-SeqNoteRef "F" "D$x")
+        if ($r.Paint) { $data[($i + 1), 7] = $r.Paint }
+        if ($r.Explanation) { $data[($i + 1), 8] = $r.Explanation }
+        if ($r.DueDate) { $data[($i + 1), 9] = $r.DueDate }
+        $data[($i + 1), 10] = "=IF(H$x<>`"`",H$x,E$x)"
+        $data[($i + 1), 11] = "=IF(I$x<>`"`",I$x,F$x)"
+        $data[($i + 1), 12] = "=IF(J$x<>`"`",J$x,G$x)"
+        $data[($i + 1), 13] = "=IF(COUNTIF(H${x}:J$x,`"?*`")>0,`"Exception set`",`"Uses default`")"
+    }
+    for ($j = 0; $j -lt $nOut; $j++) {
+        $o = $outs[$j]; $row = $nIn + 1 + $j
+        $data[$row, 0] = $o.Assembly
+        if ($o.Paint) { $data[$row, 7] = $o.Paint }
+        if ($o.Explanation) { $data[$row, 8] = $o.Explanation }
+        if ($o.DueDate) { $data[$row, 9] = $o.DueDate }
+        $data[$row, 13] = "Not in this run: $($o.Why)"
+    }
+    $sheet.Range("A1").Resize($total + 1, 16).Value2 = $data
+    foreach ($nm in @(@("Exc_Key", "A"), @("Exc_FolderKey", "D"), @("Exc_Paint", "K"), @("Exc_Expl", "L"), @("Exc_Due", "M"), @("Exc_Status", "N"))) {
+        [void]$Workbook.Names.Add($nm[0], "='Assembly Exceptions'!`$$($nm[1]):`$$($nm[1])")
+    }
+    if ($total -gt 0) {
+        $sheet.Range("H2:J$($total + 1)").Interior.Color = Get-OleColor 255 242 204      # inputs
+        $sheet.Range("D2:G$($total + 1)").Font.Color = Get-OleColor 128 128 128
+        $sheet.Range("K2:M$($total + 1)").Font.Bold = $true
+    }
+    $hdr = $sheet.Range("A1:N1")
+    $hdr.Font.Bold = $true
+    $hdr.Font.Color = Get-OleColor 255 255 255
+    $hdr.Interior.Color = Get-OleColor 27 54 93
+    $sheet.Range("P1").Font.Italic = $true
+    $widths = [double[]]@(12, 12, 10, 16, 22, 22, 14, 22, 22, 14, 22, 22, 14, 30)
+    for ($c = 0; $c -lt $widths.Count; $c++) { $sheet.Columns.Item($c + 1).ColumnWidth = $widths[$c] }
+    [void]$sheet.Range("A1:N$($total + 1)").AutoFilter()
+    $sheet.Activate()
+    $Workbook.Application.ActiveWindow.SplitRow = 1
+    $Workbook.Application.ActiveWindow.FreezePanes = $true
+    return $sheet
+}
+
+# Sequence Notes columns K:L and the label notes (H) once the Assembly Exceptions tab exists: how many exception ASSMs sit in the
+# folder and what the first one's effective paint says, appended to the Label Notes ("GREY PAINT - 12 ASSM NO PAINT").
+function Add-SequenceNotesExceptionColumns {
+    param($Workbook, [int]$RowCount)
+
+    $sheet = $Workbook.Sheets.Item("Sequence Notes")
+    $last = $RowCount + 1
+    if ($RowCount -lt 1) { return }
+    $f = New-Object "object[,]" $RowCount, 3
+    for ($i = 0; $i -lt $RowCount; $i++) {
+        $x = $i + 2
+        $base = "IF(E$x<>`"`",`"REVISES `"&E$x&IF(G$x<>`"`",`" - `"&G$x,`"`"),G$x)"
+        $f[$i, 0] = "=$base&IF(K$x>0,IF($base<>`"`",`" - `",`"`")&K$x&`" ASSM `"&IF(L$x<>`"`",L$x,`"EXCEPTION`"),`"`")"
+        $f[$i, 1] = "=COUNTIFS(Exc_FolderKey,A$x,Exc_Status,`"Exception set`")"
+        $f[$i, 2] = "=IFERROR(INDEX(Exc_Paint,MATCH(A$x,Exc_FolderKey,0))&`"`",`"`")"
+    }
+    # H is the label notes (rewritten with the exception text), K:L are new
+    for ($i = 0; $i -lt $RowCount; $i++) { $sheet.Cells.Item($i + 2, 8).Formula = $f[$i, 0] }
+    $sheet.Cells.Item(1, 11).Value2 = "Exception ASSMs"
+    $sheet.Cells.Item(1, 12).Value2 = "Exception Paint"
+    for ($i = 0; $i -lt $RowCount; $i++) {
+        $sheet.Cells.Item($i + 2, 11).Formula = $f[$i, 1]
+        $sheet.Cells.Item($i + 2, 12).Formula = $f[$i, 2]
+    }
+    $hdr = $sheet.Range("K1:L1")
+    $hdr.Font.Bold = $true
+    $hdr.Font.Color = Get-OleColor 255 255 255
+    $hdr.Interior.Color = Get-OleColor 27 54 93
+    $sheet.Range("K2:L$last").Font.Color = Get-OleColor 128 128 128
+    $sheet.Columns.Item(11).ColumnWidth = [double]16
+    $sheet.Columns.Item(12).ColumnWidth = [double]22
 }
 
 # "37'-7 13/16" from a KISS length in millimeters (nearest 1/16")
@@ -1230,10 +1472,39 @@ function Get-WorkOrderPages {
             Revises = if ($Revises -and $Revises.ContainsKey($key)) { $Revises[$key] } else { "" }
             DueDate = if ($DueDates -and $DueDates.ContainsKey($key)) { $DueDates[$key] } else { "" }
             Paint = if ($note -and $note.Coating) { $note.Coating } else { "" }
+            Explanation = if ($note -and $note.Explanation) { $note.Explanation } else { "" }
             Items = $items
         }
     }
 }
+# Splits the Exceptions-tab overrides into the ASSMs that are in this run (with the transmittal they are placed on and their
+# sequence) and those that are not (with the reason). One row per ASSM number.
+function Get-ExceptionRows {
+    param($ExceptionMap, $AsmRows, $TlNames, $WorkbookTLs)
+
+    $inRun = [System.Collections.Generic.List[object]]::new()
+    $notInRun = [System.Collections.Generic.List[object]]::new()
+    $seen = @{}
+    foreach ($row in @($AsmRows | Sort-Object { [int]$_.TlNumber }, Sequence, Assembly)) {
+        $digits = "$($row.Assembly)" -replace '\D', ''
+        if (-not $ExceptionMap -or -not $ExceptionMap.ContainsKey($digits) -or $seen.ContainsKey($digits)) { continue }
+        $seen[$digits] = $true
+        $ex = $ExceptionMap[$digits]
+        $tlName = if ($TlNames -and $TlNames.ContainsKey([int]$row.TlNumber)) { $TlNames[[int]$row.TlNumber] } else { "TL$($row.TlNumber)" }
+        $inRun.Add([PSCustomObject]@{ Assembly = $digits; TL = $tlName; Sequence = $row.Sequence; Paint = $ex.Paint; Explanation = $ex.Explanation; DueDate = $ex.DueDate })
+    }
+    if ($ExceptionMap) {
+        foreach ($k in @($ExceptionMap.Keys | Sort-Object)) {
+            if ($seen.ContainsKey($k)) { continue }
+            $ex = $ExceptionMap[$k]
+            $inSheet = @($WorkbookTLs | Where-Object { $_.SeqAssemblies.Values | Where-Object { $_.Contains($k) } }).Count -gt 0
+            $why = if ($inSheet) { "its transmittal's .kss is not in the selected files, or the assembly filter left it out" } else { "not listed in Sheet1 of the Required Assm workbook" }
+            $notInRun.Add([PSCustomObject]@{ Assembly = $k; Paint = $ex.Paint; Explanation = $ex.Explanation; DueDate = $ex.DueDate; Why = $why })
+        }
+    }
+    return [PSCustomObject]@{ InRun = @($inRun); NotInRun = @($notInRun) }
+}
+
 function Add-WorkOrderSheet {
     param($Workbook, $Pages, [string]$LogoBase64)   # job, customer job, PMs, issued date and CWI come from the Settings tab (Set_*)
 
@@ -1406,8 +1677,8 @@ function Add-WorkOrderSheet {
                 $sheet.Cells.Item($r, 15).NumberFormat = "#,##0"; $sheet.Cells.Item($r, 15).Value2 = [double]$it.WeightTotal
                 $sheet.Cells.Item($r, 13).NumberFormat = "#,##0"; $sheet.Cells.Item($r, 13).Formula = "=O$r/B$r"
                 $sheet.Cells.Item($r, 17).NumberFormat = "General"
-                $paintRef = Get-SeqNoteRef "G" "`"$($wo.TL)|$($wo.Sequence)`""
-                $sheet.Cells.Item($r, 17).Formula = "=IF($paintRef=`"`",IFERROR(Set_DefaultNotes,`"NO PAINT`"),$paintRef)"   # paint/notes live on the Sequence Notes tab
+                # paint/notes live on the Sequence Notes; an assembly with an exception shows its own paint (Assembly Exceptions tab)
+                $sheet.Cells.Item($r, 17).Formula = Get-WorkOrderNoteFormula $wo.TL $wo.Sequence $it.Assembly
                 $sheet.Cells.Item($r, 17).WrapText = $true
                 if ($itemNo % 2 -eq 0) {
                     $line = $sheet.Range($sheet.Cells.Item($r, 1), $sheet.Cells.Item($r, 17))
@@ -2518,8 +2789,14 @@ Test-KissEnvironment
 Write-Section "Data source"
 Write-Host " [1] KSS files - the .kss export from Tekla (default)"
 Write-Host " [2] Soundwall CSV - post schedule import"
+Write-Host " [3] New blank Required Assm workbook - the empty template to fill in for a job (no .kss needed)"
 Write-Host ""
-$modeChoice = (Read-Host "Choose 1 or 2 (default: 1)").Trim()
+$modeChoice = (Read-Host "Choose 1, 2 or 3 (default: 1)").Trim()
+if ($modeChoice -eq "3") {
+    [void](New-RequiredAssmTemplate)
+    Microsoft.PowerShell.Utility\Read-Host "  Press Enter to close" | Out-Null
+    return
+}
 if ($modeChoice -ne "2") { $modeChoice = "1" }
 
 # 2. PARSE DATA & METADATA
@@ -2970,6 +3247,9 @@ $workbook = $excel.Workbooks.Add()
 
 # --- Per-assembly facts shared by the Master BOM columns, the Sequence Notes tab, the labels and the work orders ---
 $allWorkbookTLs = @()
+$script:ExceptionRows = @()
+$script:ExceptionNotInRun = @()
+$script:AsmExceptions = @{}
 $asmRows = @()
 $workOrderPages = @()
 $sequenceNoteRows = @()
@@ -2987,7 +3267,8 @@ if ($modeChoice -ne "2") {
             $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tlEntry.DueDate }
             if ($due) { $workOrderDue["$([int]$tlEntry.Number)|$seq"] = $due }
             $coat = if ($note -and $note.Coating) { $note.Coating } else { $tlEntry.Coating }
-            if ($coat -and -not $workOrderNotes.ContainsKey($seq)) { $workOrderNotes[$seq] = @{ Coating = $coat } }
+            $expl = if ($note -and $note.Explanation) { $note.Explanation } else { "" }
+            if (($coat -or $expl) -and -not $workOrderNotes.ContainsKey($seq)) { $workOrderNotes[$seq] = @{ Coating = $coat; Explanation = $expl } }
             if ($tlEntry.IsRev) {
                 $hits = @(Get-RevisedTransmittals -Tl $tlEntry -AllTLs $allWorkbookTLs -Sequences @($seq) | ForEach-Object { $_.TL })
                 if ($hits.Count -gt 0) { $revisesByKey["$([int]$tlEntry.Number)|$seq"] = $hits -join ", " }
@@ -3004,7 +3285,7 @@ if ($modeChoice -ne "2") {
     $runNumbers = @($allTLs | ForEach-Object { [int]($_ -replace '\D', '0') })
     $seedByKey = [ordered]@{}
     foreach ($wo in $workOrderPages) {
-        $seedByKey["$($wo.TL)|$($wo.Sequence)"] = [PSCustomObject]@{ TL = $wo.TL; TlNumber = $wo.TlNumber; Sequence = $wo.Sequence; IsRev = $wo.IsRev; Revises = $wo.Revises; DueDate = $wo.DueDate; Paint = $wo.Paint }
+        $seedByKey["$($wo.TL)|$($wo.Sequence)"] = [PSCustomObject]@{ TL = $wo.TL; TlNumber = $wo.TlNumber; Sequence = $wo.Sequence; IsRev = $wo.IsRev; Revises = $wo.Revises; DueDate = $wo.DueDate; Paint = $wo.Paint; Explanation = $wo.Explanation }
     }
     foreach ($tlEntry in $allWorkbookTLs) {
         if ($runNumbers.Count -gt 0 -and $runNumbers -notcontains $tlEntry.Number) { continue }
@@ -3012,12 +3293,32 @@ if ($modeChoice -ne "2") {
             $note = $tlEntry.SeqNotes[$seq]
             $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tlEntry.DueDate }
             $coat = if ($note -and $note.Coating) { $note.Coating } else { $tlEntry.Coating }
+            $expl = if ($note -and $note.Explanation) { $note.Explanation } else { "" }
             $key = "$($tlEntry.TL)|$seq"
             $rev = if ($revisesByKey.ContainsKey("$([int]$tlEntry.Number)|$seq")) { $revisesByKey["$([int]$tlEntry.Number)|$seq"] } else { "" }
-            $seedByKey[$key] = [PSCustomObject]@{ TL = $tlEntry.TL; TlNumber = $tlEntry.Number; Sequence = $seq; IsRev = $tlEntry.IsRev; Revises = $rev; DueDate = $due; Paint = $coat }
+            $seedByKey[$key] = [PSCustomObject]@{ TL = $tlEntry.TL; TlNumber = $tlEntry.Number; Sequence = $seq; IsRev = $tlEntry.IsRev; Revises = $rev; DueDate = $due; Paint = $coat; Explanation = $expl }
         }
     }
     $sequenceNoteRows = @($seedByKey.Values | Sort-Object TlNumber, Sequence)
+
+    # ASSM-specific exceptions (Required Assm "Exceptions" tab): split into those in this run and those not
+    $exceptionMap = @{}
+    if ($allWorkbookTLs.Count -gt 0 -and $allWorkbookTLs[0].Exceptions) { $exceptionMap = $allWorkbookTLs[0].Exceptions }
+    $exceptionResult = Get-ExceptionRows -ExceptionMap $exceptionMap -AsmRows $asmRows -TlNames $tlNames -WorkbookTLs $allWorkbookTLs
+    $script:ExceptionRows = @($exceptionResult.InRun)
+    $script:ExceptionNotInRun = @($exceptionResult.NotInRun)
+    $script:AsmExceptions = @{}
+    foreach ($e in $script:ExceptionRows) { $script:AsmExceptions[$e.Assembly] = $e }
+    if ($exceptionMap.Count -gt 0) {
+        $byTl = @($script:ExceptionRows | Group-Object TL | Sort-Object Name | ForEach-Object { "$($_.Name) x$($_.Count)" })
+        Write-Log "Exceptions tab: $($exceptionMap.Count) ASSM override(s); $($script:ExceptionRows.Count) in this run$(if ($byTl.Count) { ' (' + ($byTl -join ', ') + ')' })." "Green"
+        if ($script:ExceptionNotInRun.Count -gt 0) {
+            Write-Log "$($script:ExceptionNotInRun.Count) exception ASSM(s) are not in this run and were not applied: $((@($script:ExceptionNotInRun | ForEach-Object { "$($_.Assembly) ($($_.Why))" }) | Select-Object -First 8) -join '; ')$(if ($script:ExceptionNotInRun.Count -gt 8) { ' ...' })" "Yellow"
+        }
+        if ($allWorkbookTLs[0].ExceptionDuplicates.Count -gt 0) {
+            Write-Log "Exceptions tab lists these ASSM more than once (the last row wins): $(($allWorkbookTLs[0].ExceptionDuplicates | Select-Object -Unique) -join ', ')" "Yellow"
+        }
+    }
 }
 
 
@@ -3032,6 +3333,8 @@ $mHeaders = @("TL #", "Assembly", "Drawing", "MainMark", "PartMark", "Qty", "Cat
 # Due Date and Paint / Notes are formulas into the Sequence Notes tab, where they are edited once per transmittal + sequence.
 if ($modeChoice -ne "2") {
     $mHeaders += @("Sequence", "Transmittal", "Rev", "Revises", "Due Date", "Paint / Notes", "Asm Qty", "Asm Wt Ea (lbs)", "Asm Wt Total (lbs)", "Asm Length", "Asm Description", "Part Wt Ea (calc)", "Part Wt Total (calc)")
+    # AD / AE: the assembly's explanation (exception override, else the sequence's) and an EXCEPTION flag; only when the run has exceptions
+    if ($script:ExceptionRows.Count -gt 0) { $mHeaders += @("Explanation", "Exception") }
 }
 for ($c = 0; $c -lt $mHeaders.Count; $c++) { $sheet1.Cells.Item(1, $c + 1) = $mHeaders[$c] }
 
@@ -3092,10 +3395,26 @@ if ($modeChoice -ne "2") {
 if ($modeChoice -ne "2") {
     Write-Log "Building Sequence Notes tab (due date and paint/notes per transmittal and sequence)..."
     [void](Add-SequenceNotesSheet -Workbook $workbook -Rows $sequenceNoteRows)
+    if ($script:ExceptionRows.Count -gt 0 -or $script:ExceptionNotInRun.Count -gt 0) {
+        Write-Log "Building Assembly Exceptions tab ($($script:ExceptionRows.Count) ASSM in this run)..."
+        [void](Add-AssemblyExceptionsSheet -Workbook $workbook -Rows $script:ExceptionRows -NotInRun $script:ExceptionNotInRun)
+        Add-SequenceNotesExceptionColumns -Workbook $workbook -RowCount @($sequenceNoteRows).Count
+    }
     # Due Date / Paint / Notes read the Sequence Notes tab. Written after the tab exists but before the BOM table is created:
     # a formula typed into an existing table column is stored as an external link to a missing workbook.
-    $sheet1.Range("U2:U$($mRows + 1)").Formula = "=" + (Get-SeqNoteRef "F" '$R2&"|"&$Q2')
-    $sheet1.Range("V2:V$($mRows + 1)").Formula = "=" + (Get-SeqNoteRef "G" '$R2&"|"&$Q2')
+    $seqKeyExpr = '$R2&"|"&$Q2'
+    if ($script:ExceptionRows.Count -gt 0) {
+        # an assembly with an exception takes its effective paint / due / explanation (Assembly Exceptions tab); every other assembly follows its folder
+        $asmKeyExpr = '$B2&""'
+        $sheet1.Range("U2:U$($mRows + 1)").Formula = "=IFERROR(INDEX(Exc_Due,MATCH($asmKeyExpr,Exc_Key,0))&`"`"," + (Get-SeqNoteRef "F" $seqKeyExpr) + ")"
+        $sheet1.Range("V2:V$($mRows + 1)").Formula = "=IFERROR(INDEX(Exc_Paint,MATCH($asmKeyExpr,Exc_Key,0))&`"`"," + (Get-SeqNoteRef "G" $seqKeyExpr) + ")"
+        $sheet1.Range("AD2:AD$($mRows + 1)").Formula = "=IFERROR(INDEX(Exc_Expl,MATCH($asmKeyExpr,Exc_Key,0))&`"`"," + (Get-SeqNoteRef "J" $seqKeyExpr) + ")"
+        $sheet1.Range("AE2:AE$($mRows + 1)").Formula = "=IF(" + (Get-ExcRef "Status" $asmKeyExpr) + "=`"Exception set`",`"EXCEPTION`",`"`")"
+    }
+    else {
+        $sheet1.Range("U2:U$($mRows + 1)").Formula = "=" + (Get-SeqNoteRef "F" $seqKeyExpr)
+        $sheet1.Range("V2:V$($mRows + 1)").Formula = "=" + (Get-SeqNoteRef "G" $seqKeyExpr)
+    }
 }
 
 $mRange = $sheet1.Range($sheet1.Cells.Item(1, 1), $sheet1.Cells.Item($mRows + 1, $mHeaders.Count))

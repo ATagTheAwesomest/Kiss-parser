@@ -1471,6 +1471,35 @@ function Add-SequenceNotesSheet {
     return $sheet
 }
 
+# Writes a 2-D array to a sheet starting at A1 in one go. If Excel refuses the bulk write (it has thrown "Insufficient memory"
+# for formula arrays), falls back to cell by cell so a single bad cell is named in the log and skipped instead of stopping the run.
+function Write-SheetArray {
+    param($Sheet, $Data, [int]$RowCount, [int]$ColCount)
+    try {
+        $Sheet.Range("A1").Resize($RowCount, $ColCount).Value2 = $Data
+        return
+    }
+    catch {
+        Write-Log "Bulk write to '$($Sheet.Name)' failed ($($_.Exception.Message)); writing cell by cell." "Yellow"
+    }
+    $bad = 0
+    for ($r = 0; $r -lt $RowCount; $r++) {
+        for ($c = 0; $c -lt $ColCount; $c++) {
+            $v = $Data[$r, $c]
+            if ($null -eq $v -or "$v" -eq "") { continue }
+            try {
+                $cell = $Sheet.Cells.Item($r + 1, $c + 1)
+                if ("$v".StartsWith("=")) { $cell.Formula = "$v" } else { $cell.Value2 = "$v" }
+            }
+            catch {
+                $bad++
+                if ($bad -le 5) { Write-Log "  Could not write row $($r + 1), column $($c + 1) ('$("$v".Substring(0, [Math]::Min(60, "$v".Length)))'): $($_.Exception.Message)" "Yellow" }
+            }
+        }
+    }
+    if ($bad -gt 0) { Write-Log "  $bad cell(s) on '$($Sheet.Name)' could not be written." "Yellow" }
+}
+
 # "Assembly Exceptions" tab: ASSM-specific overrides of the sequence's paint / explanation / due date, read from the Required
 # Assm workbook's Exceptions tab. One row per exception ASSM that is in this run (Rows: Assembly, TL, Sequence, Paint,
 # Explanation, DueDate = the overrides), then the ones that are not (NotInRun: Assembly, Paint, Explanation, DueDate, Why).
@@ -1519,7 +1548,7 @@ function Add-AssemblyExceptionsSheet {
         if ($o.DueDate) { $data[$row, 9] = $o.DueDate }
         $data[$row, 13] = "Not in this run: $($o.Why)"
     }
-    $sheet.Range("A1").Resize($total + 1, 16).Value2 = $data
+    Write-SheetArray -Sheet $sheet -Data $data -RowCount ($total + 1) -ColCount 16
     foreach ($nm in @(@("Exc_Key", "A"), @("Exc_FolderKey", "D"), @("Exc_Paint", "K"), @("Exc_Expl", "L"), @("Exc_Due", "M"), @("Exc_Status", "N"))) {
         [void]$Workbook.Names.Add($nm[0], "='Assembly Exceptions'!`$$($nm[1]):`$$($nm[1])")
     }
@@ -4438,6 +4467,17 @@ if ($workbookTLs.Count -gt 0 -and $modeChoice -ne "2") {
         }
         if ($wf.NotInWorkbook.Count -gt 0) {
             Write-Log "Selected but NOT in the workbook, so none of their assemblies are included: $($wf.NotInWorkbook -join ', ')" "Yellow"
+            foreach ($missingTl in $wf.NotInWorkbook) {
+                # A workbook transmittal that was not selected but holds most of this file's assemblies is probably the same TL with a typo in its name.
+                $fileAsm = @($masterData | Where-Object { $_.TL -eq $missingTl } | ForEach-Object { "$($_.Assembly)".Trim() } | Select-Object -Unique)
+                foreach ($other in @($workbookTLs | Where-Object { $wf.NotInRun -contains $_.TL })) {
+                    $hit = 0
+                    foreach ($a in $fileAsm) { foreach ($set in $other.SeqAssemblies.Values) { if ($set.Contains($a)) { $hit++; break } } }
+                    if ($fileAsm.Count -gt 0 -and $hit -ge ($fileAsm.Count / 2)) {
+                        Write-Log "  $hit of $($fileAsm.Count) assemblies in $missingTl are listed under $($other.TL) in the workbook. Fix the TL name in the workbook (Sheet1 header) and run again." "Yellow"
+                    }
+                }
+            }
         }
         if ($wf.NotInRun.Count -gt 0) {
             Write-Log "In the workbook but not selected for this run (ignored): $($wf.NotInRun -join ', ')" "DarkGray"
@@ -4563,34 +4603,22 @@ if ($applyRevOverride -and $revAssemblies.Count -gt 0 -and $sourceNames.Count -g
         $tlOrder[$file] = $tlNum
     }
 
+    # A REV assembly keeps only the rows from the newest file that holds it; the older files' rows of that same assembly are dropped.
+    # Every other assembly (and every row of a REV assembly in its newest file) is kept as is.
+    $newestFile = @{}
+    foreach ($g in ($masterData | Where-Object { $revAssemblies.ContainsKey($_.Assembly) } | Group-Object Assembly)) {
+        $newestFile[$g.Name] = @($g.Group | ForEach-Object { [string]$_.SourceFile } | Select-Object -Unique |
+            Sort-Object { $tlOrder[$_] } -Descending)[0]
+    }
     $filteredData = [System.Collections.Generic.List[PSCustomObject]]::new()
-    $seenAssemblies = @{}
-
-    # Sort by TL number descending (newer first)
-    $sortedItems = @($masterData | Sort-Object { $tlOrder[[string]$_.SourceFile] } -Descending)
-
-    foreach ($item in $sortedItems) {
-        $assmKey = $item.Assembly
-        $isRevAssembly = $revAssemblies.ContainsKey($assmKey)
-
-        if ($seenAssemblies.ContainsKey($assmKey)) {
-            # Skip earlier version UNLESS it's marked REV (override case)
-            if ($isRevAssembly) {
-                $idx = $filteredData.FindIndex({ param($x) $x.Assembly -eq $assmKey })
-                if ($idx -ge 0) {
-                    $filteredData[$idx] = $item
-                    $seenAssemblies[$assmKey] = $item.SourceFile
-                }
-            }
-        } else {
-            $seenAssemblies[$assmKey] = $item.SourceFile
-            $filteredData.Add($item)
-        }
+    foreach ($item in $masterData) {
+        if ($newestFile.ContainsKey($item.Assembly) -and [string]$item.SourceFile -ne $newestFile[$item.Assembly]) { continue }
+        $filteredData.Add($item)
     }
 
     if ($filteredData.Count -lt $masterData.Count) {
         $removed = $masterData.Count - $filteredData.Count
-        Write-Log "REV override: removed $removed duplicate assembly records, keeping REV versions." "Green"
+        Write-Log "REV override: removed $removed record(s) of $($newestFile.Count) REV assembly(ies) from older TLs, keeping the newest version." "Green"
         $masterData = $filteredData
     }
 }

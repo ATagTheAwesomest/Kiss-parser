@@ -574,14 +574,16 @@ function Add-FolderLabelSheet {
 
         # Line 3: comments / paint info on the left, due date on the right (blank date = slashes to fill in later)
         $cellC = $sheet.Cells.Item($r3, 1)
-        $cellC.Value2 = $label.Notes
+        $cellC.NumberFormat = "General"
+        $cellC.Formula = "=" + (Get-SeqNoteRef "H" "`"$($label.TL)|$($label.Sequence)`"")   # follows the Sequence Notes tab
         $cellC.Font.Size = 11
         $cellC.HorizontalAlignment = -4131
         $cellC.VerticalAlignment = -4108
         $cellC.ShrinkToFit = $true
         Set-LabelCellBorder $cellC
         $cellD = $sheet.Cells.Item($r3, 2)
-        $cellD.Value2 = if ($label.DueDate) { "DUE $($label.DueDate)" } else { "DUE    /    /" }
+        $cellD.NumberFormat = "General"
+        $cellD.Formula = "=" + (Get-SeqNoteRef "I" "`"$($label.TL)|$($label.Sequence)`"")   # "DUE m/d/yy", or slashes to fill in
         $cellD.Font.Size = 18
         $cellD.HorizontalAlignment = -4152
         $cellD.VerticalAlignment = -4108
@@ -724,7 +726,8 @@ function Add-TlLabelSheet {
 
             $dueCell = $sheet.Range($sheet.Cells.Item($r3, $col), $sheet.Cells.Item($r3, $last))
             $dueCell.Merge()
-            $dueCell.Value2 = if ($due) { "DUE $due" } else { "DUE    /    /" }
+            $dueCell.NumberFormat = "General"
+            $dueCell.Formula = "=" + (Get-SeqNoteRef "I" "`"$($tl.TL)|$($seqs[$n])`"")   # follows the Sequence Notes tab
             $dueCell.Font.Size = 10
             $dueCell.HorizontalAlignment = -4108
             $dueCell.VerticalAlignment = -4108
@@ -1000,6 +1003,66 @@ function Get-KssPartWeight ($shape, $size, $lengthStr, $qty) {
     return $each * $qty
 }
 
+
+# Formula text (no leading "=") that returns a column of the "Sequence Notes" tab for the row whose key is KeyExpr
+# (key = "<TL>|<sequence>"); blank when there is no such row or the cell is empty. Goes through workbook names
+# (Seq_*, defined by Add-SequenceNotesSheet): a direct 'Sequence Notes'!F:F reference inside the Master BOM table was saved as a broken external link.
+function Get-SeqNoteRef ($Column, $KeyExpr) {
+    $name = @{ F = "Seq_Due"; G = "Seq_Paint"; H = "Seq_LabelNotes"; I = "Seq_LabelDue" }[$Column]
+    'IFERROR(INDEX({0},MATCH({1},Seq_Key,0))&"","")' -f $name, $KeyExpr
+}
+
+# "Sequence Notes" tab: the one place to edit due date and paint/notes. One row per transmittal + sequence (after the REV move).
+# The Master BOM, Folder Labels, TL Labels and TERRA Work Order read these cells by formula (key in column A = "<TL>|<sequence>").
+function Add-SequenceNotesSheet {
+    param($Workbook, $Rows)
+
+    $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
+    $sheet.Name = "Sequence Notes"
+    $sheet.Cells.Font.Name = "Arial"
+    $n = @($Rows).Count
+    $sheet.Range("B2:G$($n + 2)").NumberFormat = "@"       # typed dates stay text, so the labels print them as typed
+    # Everything goes down in ONE array write (header row, data, formulas, note): in Windows PowerShell a single-cell Value2
+    # write followed by an array write on the same sheet throws InvalidCastException.
+    $data = New-Object "object[,]" ($n + 1), 11
+    $headers = @("Key", "Transmittal", "Sequence", "Rev", "Revises", "Due Date", "Paint / Notes", "Label Notes", "Label Due")
+    for ($c = 0; $c -lt $headers.Count; $c++) { $data[0, $c] = $headers[$c] }
+    $data[0, 10] = "Edit the yellow cells (Due Date, Paint / Notes). Master BOM, Folder Labels, TL Labels and TERRA Work Order follow. Blank paint prints the Settings default on work orders."
+    for ($i = 0; $i -lt $n; $i++) {
+        $r = $Rows[$i]; $x = $i + 2
+        $data[($i + 1), 0] = "=B$x&`"|`"&C$x"
+        $data[($i + 1), 1] = $r.TL
+        $data[($i + 1), 2] = $r.Sequence
+        $data[($i + 1), 3] = if ($r.IsRev) { "REV" } else { "" }
+        $data[($i + 1), 4] = $r.Revises
+        $data[($i + 1), 5] = $r.DueDate
+        $data[($i + 1), 6] = $r.Paint
+        $data[($i + 1), 7] = "=IF(E$x<>`"`",`"REVISES `"&E$x&IF(G$x<>`"`",`" - `"&G$x,`"`"),G$x)"
+        $data[($i + 1), 8] = "=IF(F$x=`"`",`"DUE    /    /`",`"DUE `"&F$x)"
+    }
+    $sheet.Range("A1").Resize($n + 1, 11).Value2 = $data
+    foreach ($nm in @(@("Seq_Key", "A"), @("Seq_Due", "F"), @("Seq_Paint", "G"), @("Seq_LabelNotes", "H"), @("Seq_LabelDue", "I"))) {
+        [void]$Workbook.Names.Add($nm[0], "='Sequence Notes'!`$$($nm[1]):`$$($nm[1])")
+    }
+    if ($n -gt 0) {
+        $sheet.Range("F2:G$($n + 1)").Interior.Color = Get-OleColor 255 242 204     # inputs
+        $sheet.Range("A2:A$($n + 1)").Font.Color = Get-OleColor 128 128 128
+        $sheet.Range("H2:I$($n + 1)").Font.Color = Get-OleColor 128 128 128
+    }
+    $hdr = $sheet.Range("A1:I1")
+    $hdr.Font.Bold = $true
+    $hdr.Font.Color = Get-OleColor 255 255 255
+    $hdr.Interior.Color = Get-OleColor 27 54 93
+    $sheet.Range("K1").Font.Italic = $true
+    $widths = [double[]]@(16, 14, 10, 7, 22, 14, 44, 44, 16)   # doubles: the COM binder caches the first ColumnWidth argument type and later double writes would fail
+    for ($c = 0; $c -lt $widths.Count; $c++) { $sheet.Columns.Item($c + 1).ColumnWidth = $widths[$c] }
+    [void]$sheet.Range("A1:I$($n + 1)").AutoFilter()
+    $sheet.Activate()
+    $Workbook.Application.ActiveWindow.SplitRow = 1
+    $Workbook.Application.ActiveWindow.FreezePanes = $true
+    return $sheet
+}
+
 # "37'-7 13/16" from a KISS length in millimeters (nearest 1/16")
 function Format-FeetInches16 ($lengthStr) {
     $mm = 0.0
@@ -1018,9 +1081,11 @@ function Format-FeetInches16 ($lengthStr) {
     return $out
 }
 
-# One row per assembly: Item data for the report. Part qtys in a KISS D block are totals for the assembly qty.
-function Get-WorkOrderPages {
-    param($MasterData, $SeqNotes, [string]$DefaultNotes = "NO PAINT", $RevAssemblies = $null, $TlNames = $null, $DueDates = $null)
+# One row per (source TL, assembly): the assembly-level facts shared by the work orders and the Master BOM columns.
+# Part qtys in a KISS D block are totals for the assembly qty. An assembly listed in a REV transmittal (Required Assm)
+# is placed on that REV (TlNumber) instead of its original TL.
+function Get-AssemblyRows {
+    param($MasterData, $RevAssemblies = $null)
 
     $rows = foreach ($g in ($MasterData | Group-Object -Property TL, Assembly)) {
         $parts = @($g.Group)
@@ -1040,26 +1105,35 @@ function Get-WorkOrderPages {
         [PSCustomObject]@{
             TL = $tl; Sequence = $seq; Assembly = $assm; Qty = $asmQty
             Description = $desc; Remark = "$($main.Description)"; Length = Format-FeetInches16 $main.Length
-            WeightTotal = $wt
+            WeightTotal = $wt; WeightEach = $wt / $asmQty
         }
     }
-    # One work order per transmittal + sequence (a folder per TL, a folder per sequence inside it). An assembly listed in a
-    # REV transmittal (Required Assm) moves off its original TL's work order and shows only on the REV.
-    $placed = foreach ($row in $rows) {
+    foreach ($row in $rows) {
         $own = [int]($row.TL -replace '\D', '0')
         $tlNumber = if ($RevAssemblies -and $RevAssemblies.ContainsKey($row.Assembly)) { [int]$RevAssemblies[$row.Assembly] } else { $own }
         $row | Add-Member -NotePropertyName TlNumber -NotePropertyValue $tlNumber -PassThru -Force
     }
-    foreach ($g in ($placed | Group-Object -Property TlNumber, Sequence)) {
+}
+
+# One work order per transmittal + sequence (a folder per TL, a folder per sequence inside it).
+# Revises = "TlNumber|Sequence" -> text of the transmittals a REV replaces (blank for non-REV).
+function Get-WorkOrderPages {
+    param($AssemblyRows, $SeqNotes, $TlNames = $null, $DueDates = $null, $Revises = $null)
+
+    foreach ($g in ($AssemblyRows | Group-Object -Property TlNumber, Sequence)) {
         $first = $g.Group[0]
+        $key = "$($first.TlNumber)|$($first.Sequence)"
         $items = @($g.Group | Group-Object -Property Assembly | ForEach-Object { $_.Group | Select-Object -Last 1 } | Sort-Object Assembly)
         $note = if ($SeqNotes) { $SeqNotes[$first.Sequence] } else { $null }
+        $tlName = if ($TlNames -and $TlNames.ContainsKey($first.TlNumber)) { $TlNames[$first.TlNumber] } else { "TL$($first.TlNumber)" }
         [PSCustomObject]@{
             Sequence = $first.Sequence
-            TL = if ($TlNames -and $TlNames.ContainsKey($first.TlNumber)) { $TlNames[$first.TlNumber] } else { "TL$($first.TlNumber)" }
+            TL = $tlName
             TlNumber = $first.TlNumber
-            DueDate = if ($DueDates -and $DueDates.ContainsKey("$($first.TlNumber)|$($first.Sequence)")) { $DueDates["$($first.TlNumber)|$($first.Sequence)"] } else { "" }
-            Notes = if ($note -and $note.Coating) { $note.Coating } else { $DefaultNotes }
+            IsRev = ($tlName -like 'TLR*')
+            Revises = if ($Revises -and $Revises.ContainsKey($key)) { $Revises[$key] } else { "" }
+            DueDate = if ($DueDates -and $DueDates.ContainsKey($key)) { $DueDates[$key] } else { "" }
+            Paint = if ($note -and $note.Coating) { $note.Coating } else { "" }
             Items = $items
         }
     }
@@ -1181,7 +1255,11 @@ function Add-WorkOrderSheet {
                 & $valueCell $r2 1 4 "=Set_ProjectManagers"
                 & $valueCell $r2 5 7 "=TEXTJOIN("" / "",TRUE,Set_OurJob,""$($wo.Sequence)"")"
                 & $valueCell $r2 8 11 "=Set_IssuedDate" "m/d/yy"
-                & $valueCell $r2 12 15 $(if ($wo.DueDate) { $wo.DueDate } else { "3 WKS AFTER`nMATERIAL ARRIVES" })
+                & $valueCell $r2 12 15 ""
+                $dueCellWo = $sheet.Cells.Item($r2, 12)
+                $dueCellWo.NumberFormat = "General"
+                $dueRef = Get-SeqNoteRef "F" "`"$($wo.TL)|$($wo.Sequence)`""
+                $dueCellWo.Formula = "=IF($dueRef=`"`",IFERROR(Set_DefaultDue,`"3 WKS AFTER MATERIAL ARRIVES`"),$dueRef)"
                 & $valueCell $r2 16 17 "=Set_CWI"
                 & $labelCell $r3 1 3 "DWGS APPROVED"
                 & $labelCell $r3 4 6 "CUSTOMER JOB#"
@@ -1231,7 +1309,9 @@ function Add-WorkOrderSheet {
                 $sheet.Cells.Item($r, 11).Value2 = $it.Length
                 $sheet.Cells.Item($r, 15).NumberFormat = "#,##0"; $sheet.Cells.Item($r, 15).Value2 = [double]$it.WeightTotal
                 $sheet.Cells.Item($r, 13).NumberFormat = "#,##0"; $sheet.Cells.Item($r, 13).Formula = "=O$r/B$r"
-                $sheet.Cells.Item($r, 17).Value2 = $wo.Notes
+                $sheet.Cells.Item($r, 17).NumberFormat = "General"
+                $paintRef = Get-SeqNoteRef "G" "`"$($wo.TL)|$($wo.Sequence)`""
+                $sheet.Cells.Item($r, 17).Formula = "=IF($paintRef=`"`",IFERROR(Set_DefaultNotes,`"NO PAINT`"),$paintRef)"   # paint/notes live on the Sequence Notes tab
                 $sheet.Cells.Item($r, 17).WrapText = $true
                 if ($itemNo % 2 -eq 0) {
                     $line = $sheet.Range($sheet.Cells.Item($r, 1), $sheet.Cells.Item($r, 17))
@@ -2833,12 +2913,71 @@ $excel.ScreenUpdating = $false
 $workbook = $excel.Workbooks.Add()
 
 
+# --- Per-assembly facts shared by the Master BOM columns, the Sequence Notes tab, the labels and the work orders ---
+$allWorkbookTLs = @()
+$asmRows = @()
+$workOrderPages = @()
+$sequenceNoteRows = @()
+$asmByKey = @{}
+if ($modeChoice -ne "2") {
+    if ($requiredAssmPath) {
+        try { $allWorkbookTLs = @(Read-RequiredAssm -Excel $excel -Path $requiredAssmPath | Where-Object { $_ }) }
+        catch { Write-Log "Could not read the Required Assm workbook: $($_.Exception.Message)" "Red" }
+    }
+    $revAssemblies = @{}; $tlNames = @{}; $workOrderDue = @{}; $revisesByKey = @{}; $workOrderNotes = @{}
+    foreach ($tlEntry in @($allWorkbookTLs | Sort-Object Number)) {
+        $tlNames[[int]$tlEntry.Number] = $tlEntry.TL
+        foreach ($seq in $tlEntry.Sequences) {
+            $note = $tlEntry.SeqNotes[$seq]
+            $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tlEntry.DueDate }
+            if ($due) { $workOrderDue["$([int]$tlEntry.Number)|$seq"] = $due }
+            $coat = if ($note -and $note.Coating) { $note.Coating } else { $tlEntry.Coating }
+            if ($coat -and -not $workOrderNotes.ContainsKey($seq)) { $workOrderNotes[$seq] = @{ Coating = $coat } }
+            if ($tlEntry.IsRev) {
+                $hits = @(Get-RevisedTransmittals -Tl $tlEntry -AllTLs $allWorkbookTLs -Sequences @($seq) | ForEach-Object { $_.TL })
+                if ($hits.Count -gt 0) { $revisesByKey["$([int]$tlEntry.Number)|$seq"] = $hits -join ", " }
+            }
+        }
+        if ($tlEntry.IsRev) { foreach ($set in $tlEntry.SeqAssemblies.Values) { foreach ($asm in $set) { $revAssemblies[$asm] = [int]$tlEntry.Number } } }
+    }
+    $asmRows = @(Get-AssemblyRows -MasterData $masterData -RevAssemblies $revAssemblies)
+    foreach ($r in $asmRows) { $asmByKey["$($r.TL)|$($r.Assembly)"] = $r }
+    $workOrderPages = @(Get-WorkOrderPages -AssemblyRows $asmRows -SeqNotes $workOrderNotes -TlNames $tlNames -DueDates $workOrderDue -Revises $revisesByKey | Sort-Object TlNumber, Sequence)
+
+    # One Sequence Notes row per placed transmittal + sequence: every work order, plus every Required Assm folder of this run.
+    # Due date and paint/notes start from Required Assm (TL Notes tab); blank where there is nothing.
+    $runNumbers = @($allTLs | ForEach-Object { [int]($_ -replace '\D', '0') })
+    $seedByKey = [ordered]@{}
+    foreach ($wo in $workOrderPages) {
+        $seedByKey["$($wo.TL)|$($wo.Sequence)"] = [PSCustomObject]@{ TL = $wo.TL; TlNumber = $wo.TlNumber; Sequence = $wo.Sequence; IsRev = $wo.IsRev; Revises = $wo.Revises; DueDate = $wo.DueDate; Paint = $wo.Paint }
+    }
+    foreach ($tlEntry in $allWorkbookTLs) {
+        if ($runNumbers.Count -gt 0 -and $runNumbers -notcontains $tlEntry.Number) { continue }
+        foreach ($seq in $tlEntry.Sequences) {
+            $note = $tlEntry.SeqNotes[$seq]
+            $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tlEntry.DueDate }
+            $coat = if ($note -and $note.Coating) { $note.Coating } else { $tlEntry.Coating }
+            $key = "$($tlEntry.TL)|$seq"
+            $rev = if ($revisesByKey.ContainsKey("$([int]$tlEntry.Number)|$seq")) { $revisesByKey["$([int]$tlEntry.Number)|$seq"] } else { "" }
+            $seedByKey[$key] = [PSCustomObject]@{ TL = $tlEntry.TL; TlNumber = $tlEntry.Number; Sequence = $seq; IsRev = $tlEntry.IsRev; Revises = $rev; DueDate = $due; Paint = $coat }
+        }
+    }
+    $sequenceNoteRows = @($seedByKey.Values | Sort-Object TlNumber, Sequence)
+}
+
+
 # --- TAB 1: MASTER BOM ---
 Write-Log "Building Tab 1: Master BOM..."
 $sheet1 = $workbook.Sheets.Item(1)
 $sheet1.Name = "Master BOM"
 
 $mHeaders = @("TL #", "Assembly", "Drawing", "MainMark", "PartMark", "Qty", "Category", "Shape", "Size", "Length", "Grade", "Description", "Unit Wt (lbs)", "Total Wt (lbs)", "Status", "SourceFile")
+# Columns Q onward are appended so the fixed letters A-P that Statistics and the plate/profile tabs read never move.
+# Assembly columns repeat on every part row of the assembly (filter on Assembly; do not SUM them over parts).
+# Due Date and Paint / Notes are formulas into the Sequence Notes tab, where they are edited once per transmittal + sequence.
+if ($modeChoice -ne "2") {
+    $mHeaders += @("Sequence", "Transmittal", "Rev", "Revises", "Due Date", "Paint / Notes", "Asm Qty", "Asm Wt Ea (lbs)", "Asm Wt Total (lbs)", "Asm Length", "Asm Description", "Part Wt Ea (calc)", "Part Wt Total (calc)")
+}
 for ($c = 0; $c -lt $mHeaders.Count; $c++) { $sheet1.Cells.Item(1, $c + 1) = $mHeaders[$c] }
 
 $mRows = $masterData.Count
@@ -2864,10 +3003,45 @@ for ($i = 0; $i -lt $mRows; $i++) {
     $mData[$i, 13] = "=F$(2+$i)*M$(2+$i)"
     $mData[$i, 14] = "PENDING"
     $mData[$i, 15] = $item.SourceFile
+    if ($modeChoice -ne "2") {
+        $a = $asmByKey["$($item.TL)|$($item.Assembly)"]
+        $r = 2 + $i
+        $tlPlaced = if ($a -and $tlNames.ContainsKey($a.TlNumber)) { $tlNames[$a.TlNumber] } elseif ($a) { "TL$($a.TlNumber)" } else { "$($item.TL)" }
+        $seq = if ($a) { $a.Sequence } else { "$($item.Assembly)".Substring(0, [Math]::Min(4, "$($item.Assembly)".Length)) }
+        $mData[$i, 16] = $seq
+        $mData[$i, 17] = $tlPlaced
+        $mData[$i, 18] = if ($tlPlaced -like 'TLR*') { "REV" } else { "" }
+        $mData[$i, 19] = if ($revisesByKey.ContainsKey("$($a.TlNumber)|$seq")) { $revisesByKey["$($a.TlNumber)|$seq"] } else { "" }
+        if ($a) {
+            $mData[$i, 22] = $a.Qty
+            $mData[$i, 23] = [Math]::Round($a.WeightEach, 2)
+            $mData[$i, 24] = [Math]::Round($a.WeightTotal, 2)
+            $mData[$i, 25] = $a.Length
+            $mData[$i, 26] = $a.Description
+        }
+        $partWt = Get-KssPartWeight $item.Shape $item.Size $item.Length $item.Qty
+        $partQty = [double]$item.Qty
+        $mData[$i, 27] = if ($partQty -gt 0) { [Math]::Round($partWt / $partQty, 2) } else { 0 }
+        $mData[$i, 28] = [Math]::Round($partWt, 2)
+    }
 }
 
+if ($modeChoice -ne "2") { $sheet1.Range("Q2:T$($mRows + 1)").NumberFormat = "@" }   # before the write, so sequence 1234 stays text like the lookup keys
 $sheet1.Range("A2").Resize($mRows, $mHeaders.Count).Value2 = $mData
 $sheet1.Range("M2:N$($mRows + 1)").NumberFormat = "#,##0.00"
+if ($modeChoice -ne "2") {
+    $sheet1.Range("X2:Y$($mRows + 1)").NumberFormat = "#,##0.00"
+    $sheet1.Range("AB2:AC$($mRows + 1)").NumberFormat = "#,##0.00"
+}
+
+if ($modeChoice -ne "2") {
+    Write-Log "Building Sequence Notes tab (due date and paint/notes per transmittal and sequence)..."
+    [void](Add-SequenceNotesSheet -Workbook $workbook -Rows $sequenceNoteRows)
+    # Due Date / Paint / Notes read the Sequence Notes tab. Written after the tab exists but before the BOM table is created:
+    # a formula typed into an existing table column is stored as an external link to a missing workbook.
+    $sheet1.Range("U2:U$($mRows + 1)").Formula = "=" + (Get-SeqNoteRef "F" '$R2&"|"&$Q2')
+    $sheet1.Range("V2:V$($mRows + 1)").Formula = "=" + (Get-SeqNoteRef "G" '$R2&"|"&$Q2')
+}
 
 $mRange = $sheet1.Range($sheet1.Cells.Item(1, 1), $sheet1.Cells.Item($mRows + 1, $mHeaders.Count))
 $mTable = $sheet1.ListObjects.Add(1, $mRange, $null, 1)
@@ -2875,7 +3049,6 @@ $mTable.Name = "MasterBOMTable"
 $mTable.TableStyle = "TableStyleMedium2"
 $mTable.ShowTotals = $true
 $mRange.EntireColumn.AutoFit()
-
 $sheet1.Activate()
 $excel.ActiveWindow.SplitRow = 1
 $excel.ActiveWindow.FreezePanes = $true
@@ -4031,8 +4204,7 @@ $dashboard.Columns.Item(23).ColumnWidth = 16
 if ($requiredAssmPath) {
     Write-Log "Building Folder Labels tab from $([System.IO.Path]::GetFileName($requiredAssmPath))..."
     try {
-        $labelData = @(Read-RequiredAssm -Excel $excel -Path $requiredAssmPath)
-        $allWorkbookTLs = $labelData
+        $labelData = @($allWorkbookTLs)   # read once, before the Master BOM was built
         if ($allTLs.Count -gt 0) {
             $runNumbers = @($allTLs | ForEach-Object { [int]($_ -replace '\D', '0') })
             $skipped = @($labelData | Where-Object { $runNumbers -notcontains $_.Number } | ForEach-Object { $_.TL })
@@ -4081,29 +4253,6 @@ if ($requiredAssmPath) {
 if ($modeChoice -ne "2") {
     Write-Log "Building TERRA Work Order tab..."
     try {
-        # NOTES column: paint info per sequence from the Required Assm workbook (TL Notes tab), else "NO PAINT"
-        $workOrderNotes = @{}
-        if ($allWorkbookTLs) {
-            foreach ($tlEntry in $allWorkbookTLs) {
-                foreach ($seq in $tlEntry.Sequences) {
-                    $note = $tlEntry.SeqNotes[$seq]
-                    $coat = if ($note -and $note.Coating) { $note.Coating } else { $tlEntry.Coating }
-                    if ($coat -and -not $workOrderNotes.ContainsKey($seq)) { $workOrderNotes[$seq] = @{ Coating = $coat } }
-                }
-            }
-        }
-        $revAssemblies = @{}; $tlNames = @{}; $workOrderDue = @{}
-        foreach ($tlEntry in @($allWorkbookTLs | Sort-Object Number)) {
-            if (-not $tlEntry) { continue }
-            $tlNames[[int]$tlEntry.Number] = $tlEntry.TL
-            foreach ($seq in $tlEntry.Sequences) {   # same due date as the folder label stickers
-                $note = $tlEntry.SeqNotes[$seq]
-                $due = if ($note -and $note.DueDate) { $note.DueDate } else { $tlEntry.DueDate }
-                if ($due) { $workOrderDue["$([int]$tlEntry.Number)|$seq"] = $due }
-            }
-            if ($tlEntry.IsRev) { foreach ($set in $tlEntry.SeqAssemblies.Values) { foreach ($asm in $set) { $revAssemblies[$asm] = [int]$tlEntry.Number } } }
-        }
-        $workOrderPages = @(Get-WorkOrderPages -MasterData $masterData -SeqNotes $workOrderNotes -RevAssemblies $revAssemblies -TlNames $tlNames -DueDates $workOrderDue | Sort-Object TlNumber, Sequence)
         [void](Add-WorkOrderSheet -Workbook $workbook -Pages $workOrderPages -LogoBase64 $script:TerraLogoBase64)
         Write-Log "TERRA Work Order tab ready: $($workOrderPages.Count) work order(s), one per TL and sequence." "Green"
     }

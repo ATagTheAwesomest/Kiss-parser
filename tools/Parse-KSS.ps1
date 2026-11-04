@@ -3691,7 +3691,7 @@ function New-ShopRoutineLines ($KeyCount, [bool]$IsSort) {
 
 function New-TypeMacroLines ($Keys, $Plates, $ProjectName, $JobNumber, $SelFile) {
     $safeProject = Escape-BatchText ($ProjectName -replace '[&|<>^%]', '')
-    $lines = New-ShopSelectionLines "Auto-Type Plate Quantities / Grades" $ProjectName $JobNumber $Keys $Plates $SelFile $false
+    $lines = [System.Collections.Generic.List[string]]@(New-ShopSelectionLines "Auto-Type Plate Quantities / Grades" $ProjectName $JobNumber $Keys $Plates $SelFile $false)
     $lines.Add(':choose')
     $lines.Add('echo.')
     $lines.Add('echo   What do you want to type?')
@@ -3764,7 +3764,7 @@ function New-TypeMacroLines ($Keys, $Plates, $ProjectName, $JobNumber, $SelFile)
 }
 
 function New-SortScriptLines ($Keys, $Plates, $ProjectName, $JobNumber, $SelFile) {
-    $lines = New-ShopSelectionLines "DXF Plate & Sheet Sorting Utility" $ProjectName $JobNumber $Keys $Plates $SelFile $true
+    $lines = [System.Collections.Generic.List[string]]@(New-ShopSelectionLines "DXF Plate & Sheet Sorting Utility" $ProjectName $JobNumber $Keys $Plates $SelFile $true)
     $lines.Add('echo.')
     $lines.Add('echo   Working in: !WORK_DIR!')
     $lines.Add('echo.')

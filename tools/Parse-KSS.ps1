@@ -4200,6 +4200,419 @@ $dashboard.Columns.Item(21).ColumnWidth = 12
 $dashboard.Columns.Item(22).ColumnWidth = 12
 $dashboard.Columns.Item(23).ColumnWidth = 16
 
+# Builds the QPR sheets (one per TL, or per TL + sequence) in $Workbook. Returns the number of sheets made.
+# -ReuseFirstSheet: the standalone QPR workbook uses its empty first sheet.
+# -Linked: sheets go into the master BOM workbook; the Job: box follows Settings and the due / paint line follows Sequence Notes.
+function Add-QualityProcessSheets {
+    param(
+        $Workbook,
+        [System.Collections.Generic.List[PSCustomObject]]$MasterData,
+        [string]$QprJobNumber,
+        [string]$GroupBy,  # "TL", "Assembly", or "Sequence"
+        [bool]$ReuseFirstSheet = $false,
+        [bool]$Linked = $false,
+        [string]$CustomerJob = "",
+        [bool]$HasSequenceNotes = $false
+    )
+    $wb = $Workbook
+
+    $xlContinuous    = 1
+    $xlThin          = 2
+    $xlMedium        = -4138
+    $xlNoneColorIdx  = -4142
+    $xlCenter        = -4108
+    $xlBottom        = -4107
+    $xlLeft          = -4131
+    $xlHoriz         = -4128
+    $grayBg          = 14277081
+
+    # Helper: set a single border side by literal index (avoids variable-cast COM error)
+    # Uses the Range's BorderAround trick: set all borders then we handle sides separately via
+    # individual cell references. For targeted single-side ops we call this small helper.
+    function Set-BorderSide ($cellOrRange, [int]$side, [int]$style, [int]$weight) {
+        # $side: 7=left 8=top 9=bottom 10=right
+        try {
+            $bd = $cellOrRange.Borders.Item($side)
+            $bd.LineStyle = $style
+            $bd.Weight    = $weight
+        } catch {
+            # fallback: skip per-side tweak if COM refuses
+        }
+    }
+
+    if ($GroupBy -eq "TL") {
+        $groups = @($MasterData | Group-Object TL | Sort-Object Name)
+    } elseif ($GroupBy -eq "Sequence") {
+        # One sheet per TL + sequence (first 4 digits of assembly), so the sequence sheets still say which TL they came from
+        $groups = @($MasterData | Group-Object {
+            $assm = $_.Assembly
+            $seq = if ($assm -match '^(\d{4})') { $Matches[1] } else { $assm.Substring(0, [Math]::Min(4, $assm.Length)) }
+            "$($_.TL)`t$seq"
+        } | Sort-Object Name)
+    } else {
+        $groups = @($MasterData | Group-Object Assembly | Sort-Object Name)
+    }
+
+    if ($groups.Count -eq 0) {
+        Write-Log "No data found for Quality Process Report." "Yellow"
+        return 0
+    }
+
+    $headerDefs = @(
+        [PSCustomObject]@{ Col=1;  Label="QTY";               Orient=$xlHoriz; Gray=$false; Va=$xlCenter; ThickL=$true  }
+        [PSCustomObject]@{ Col=2;  Label="PART #";             Orient=$xlHoriz; Gray=$false; Va=$xlCenter; ThickL=$true  }
+        [PSCustomObject]@{ Col=3;  Label="ITEM DESCRIPTION";   Orient=$xlHoriz; Gray=$false; Va=$xlCenter; ThickL=$false }
+        [PSCustomObject]@{ Col=4;  Label="MATERIAL SIZE";      Orient=45;       Gray=$true;  Va=$xlBottom; ThickL=$false }
+        [PSCustomObject]@{ Col=5;  Label="CUT LENGTH";         Orient=45;       Gray=$false; Va=$xlBottom; ThickL=$false }
+        [PSCustomObject]@{ Col=6;  Label="HOLE SIZE";          Orient=45;       Gray=$true;  Va=$xlBottom; ThickL=$false }
+        [PSCustomObject]@{ Col=7;  Label="LAYOUT";             Orient=45;       Gray=$false; Va=$xlBottom; ThickL=$false }
+        [PSCustomObject]@{ Col=8;  Label="FIT-UP";             Orient=45;       Gray=$true;  Va=$xlBottom; ThickL=$false }
+        [PSCustomObject]@{ Col=9;  Label="WELD SIZE";          Orient=45;       Gray=$false; Va=$xlBottom; ThickL=$false }
+        [PSCustomObject]@{ Col=10; Label="WELDER I.D. STAMP";  Orient=45;       Gray=$true;  Va=$xlBottom; ThickL=$false }
+        [PSCustomObject]@{ Col=11; Label="PART NUMBER STAMP";  Orient=45;       Gray=$false; Va=$xlBottom; ThickL=$false }
+        [PSCustomObject]@{ Col=12; Label="SURFACE PREP.";      Orient=45;       Gray=$true;  Va=$xlBottom; ThickL=$false }
+        [PSCustomObject]@{ Col=13; Label="COATING";            Orient=45;       Gray=$false; Va=$xlBottom; ThickL=$false }
+    )
+
+    $sheetIndex = 0
+    foreach ($grp in $groups) {
+        $sheetIndex++
+        # Sheet / job label: {job} - {TL}, or {job} - {TL} - {sequence} when grouped by sequence
+        $labelParts = @()
+        if ($QprJobNumber) { $labelParts += $QprJobNumber }
+        if ($GroupBy -eq "Sequence") {
+            $seqTl, $seqNum = $grp.Name -split "`t", 2
+            if ($seqTl) { $labelParts += $seqTl }
+            $labelParts += $seqNum
+        }
+        else {
+            $labelParts += $(if ($grp.Name) { $grp.Name } else { "(No TL)" })
+        }
+        $jobLabel  = $labelParts -join " - "
+        $sheetName = ($jobLabel -replace '[\\\/\?\*\[\]\:]', '_')
+        if ($sheetName.Length -gt 31) { $sheetName = $sheetName.Substring(0, 31) }
+
+        $ws = if ($sheetIndex -eq 1 -and $ReuseFirstSheet) {
+            $wb.Sheets.Item(1)
+        } else {
+            $wb.Sheets.Add([Type]::Missing, $wb.Sheets.Item($wb.Sheets.Count))
+        }
+        if ($Linked) {
+            # In the master workbook other tabs already exist: keep the QPR tab name unique
+            $baseName = $sheetName; $n = 1
+            while (@($wb.Sheets | Where-Object { $_.Name -eq $sheetName -and $_.Index -ne $ws.Index }).Count -gt 0) {
+                $n++; $suffix = " ($n)"
+                $sheetName = $baseName.Substring(0, [Math]::Min($baseName.Length, 31 - $suffix.Length)) + $suffix
+            }
+        }
+        $ws.Name = $sheetName
+
+        # Column widths
+        $ws.Columns.Item(1).ColumnWidth  = 6
+        $ws.Columns.Item(2).ColumnWidth  = 10
+        $ws.Columns.Item(3).ColumnWidth  = 30
+        for ($c = 4; $c -le 16; $c++) { $ws.Columns.Item($c).ColumnWidth = 6 }
+        $ws.Columns.Item(17).ColumnWidth = 3.43
+
+        $ps = $ws.PageSetup
+        $ps.Orientation   = 2
+        $ps.Zoom          = $false
+        $ps.FitToPagesWide = 1
+        $ps.FitToPagesTall = $false
+        $ps.LeftMargin    = 7.2
+        $ps.RightMargin   = 7.2
+        $ps.TopMargin     = 7.2
+        $ps.BottomMargin  = 7.2
+        $ps.HeaderMargin  = 0
+        $ps.FooterMargin  = 0
+        $ps.CenterHeader  = ""
+        $ps.LeftHeader    = ""
+        $ps.RightHeader   = ""
+        $ps.CenterFooter  = ""
+        $ps.LeftFooter    = ""
+        $ps.RightFooter   = ""
+
+        # Row heights
+        $ws.Rows.Item(1).RowHeight = 16.5
+        $ws.Rows.Item(2).RowHeight = 16.5
+        $ws.Rows.Item(3).RowHeight = 16.5
+        $ws.Rows.Item(4).RowHeight = 21.75
+        $ws.Rows.Item(5).RowHeight = 74.25
+
+        # --- Title R1C3:R3C11 ---
+        $ws.Range($ws.Cells.Item(1,3), $ws.Cells.Item(3,11)).Merge()
+        $ws.Cells.Item(1,3).Value2              = "          PROJECT QUALITY PROCESS REPORT"
+        $ws.Cells.Item(1,3).Font.Name           = "Arial Narrow"
+        $ws.Cells.Item(1,3).Font.Size           = 16
+        $ws.Cells.Item(1,3).Font.Bold           = $true
+        $ws.Cells.Item(1,3).HorizontalAlignment = $xlLeft
+        $ws.Cells.Item(1,3).VerticalAlignment   = $xlCenter
+
+        # Job Number label R1C12:C13, value R1C14:C16 with bottom underline
+        $ws.Range($ws.Cells.Item(1,12), $ws.Cells.Item(1,13)).Merge()
+        $ws.Cells.Item(1,12).Value2    = "Job:"
+        $ws.Cells.Item(1,12).Font.Name = "Arial Narrow"
+        $ws.Cells.Item(1,12).Font.Bold = $true
+        $jnRange = $ws.Range($ws.Cells.Item(1,14), $ws.Cells.Item(1,16))
+        $jnRange.Merge()
+        $ws.Cells.Item(1,14).Value2    = $jobLabel   # mirrors the sheet name (Excel cuts sheet names at 31 characters, this cell does not)
+        if ($Linked -and $CustomerJob -and $QprJobNumber -eq $CustomerJob) {
+            # Job name left at the default: follow Settings (Set_CustomerJob)
+            $tlText = if ($GroupBy -eq "Sequence") { $seqTl } else { $(if ($grp.Name) { $grp.Name } else { "(No TL)" }) }
+            $jobParts = @("Set_CustomerJob", """$tlText""")
+            if ($GroupBy -eq "Sequence") { $jobParts += """$seqNum""" }
+            $ws.Cells.Item(1,14).Formula = "=TEXTJOIN("" - "",TRUE," + ($jobParts -join ",") + ")"
+        }
+        $ws.Cells.Item(1,14).Font.Name = "Arial Narrow"
+        $jnRange.ShrinkToFit = $true
+        Set-BorderSide $jnRange 9 $xlContinuous $xlThin   # bottom underline
+
+        # Inspector R2C12:C13, write-in area R2C14:C16 top+bottom lines
+        $ws.Range($ws.Cells.Item(2,12), $ws.Cells.Item(2,13)).Merge()
+        $ws.Cells.Item(2,12).Value2    = "Inspector:"
+        $ws.Cells.Item(2,12).Font.Name = "Arial Narrow"
+        $ws.Cells.Item(2,12).Font.Bold = $true
+        $insRange = $ws.Range($ws.Cells.Item(2,14), $ws.Cells.Item(2,16))
+        $insRange.Merge()
+        Set-BorderSide $insRange 8 $xlContinuous $xlThin   # top
+        Set-BorderSide $insRange 9 $xlContinuous $xlThin   # bottom
+
+        # Date R3C12:C13, write-in area R3C14:C16 top+bottom lines
+        $ws.Range($ws.Cells.Item(3,12), $ws.Cells.Item(3,13)).Merge()
+        $ws.Cells.Item(3,12).Value2    = "Date:"
+        $ws.Cells.Item(3,12).Font.Name = "Arial Narrow"
+        $ws.Cells.Item(3,12).Font.Bold = $true
+        $dtRange = $ws.Range($ws.Cells.Item(3,14), $ws.Cells.Item(3,16))
+        $dtRange.Merge()
+        Set-BorderSide $dtRange 8 $xlContinuous $xlThin    # top
+        Set-BorderSide $dtRange 9 $xlContinuous $xlThin    # bottom
+
+        # --- Row 4 separator: medium bottom border across C3:C12 and C13:C16 ---
+        $sep1 = $ws.Range($ws.Cells.Item(4,3), $ws.Cells.Item(4,12))
+        $sep1.Merge()
+        if ($Linked -and $HasSequenceNotes -and $GroupBy -eq "Sequence") {
+            # Due date and paint / REVISES note for this TL + sequence, read live from the Sequence Notes tab
+            $seqKey = """$seqTl|$seqNum"""
+            $noteFormula = "=TRIM(" + (Get-SeqNoteRef "I" $seqKey) + "&IF(" + (Get-SeqNoteRef "H" $seqKey) + "<>"""","" - ""&" + (Get-SeqNoteRef "H" $seqKey) + ",""""))"
+            $ws.Cells.Item(4,3).Formula = $noteFormula
+            $ws.Cells.Item(4,3).Font.Name = "Arial Narrow"
+            $ws.Cells.Item(4,3).Font.Size = 11
+            $ws.Cells.Item(4,3).Font.Bold = $true
+            $ws.Cells.Item(4,3).HorizontalAlignment = $xlLeft
+            $ws.Cells.Item(4,3).VerticalAlignment = $xlBottom
+            $sep1.ShrinkToFit = $true
+        }
+        Set-BorderSide $sep1 9 $xlContinuous $xlMedium
+        $sep2 = $ws.Range($ws.Cells.Item(4,13), $ws.Cells.Item(4,16))
+        $sep2.Merge()
+        Set-BorderSide $sep2 9 $xlContinuous $xlMedium
+
+        # --- Header row 5 ---
+        foreach ($hd in $headerDefs) {
+            $cell = $ws.Cells.Item(5, $hd.Col)
+            $cell.Value2              = $hd.Label
+            $cell.Font.Name          = "Arial Narrow"
+            $cell.Font.Size          = 10
+            $cell.Font.Bold          = $true
+            $cell.Orientation        = $hd.Orient
+            $cell.VerticalAlignment  = $hd.Va
+            $cell.HorizontalAlignment = $xlCenter
+            $cell.WrapText           = $false
+            if ($hd.Gray) {
+                $cell.Interior.Color = $grayBg
+            } else {
+                $cell.Interior.ColorIndex = $xlNoneColorIdx
+            }
+            $cell.Borders.LineStyle = $xlContinuous
+            $cell.Borders.Weight    = $xlThin
+            if ($hd.ThickL) { Set-BorderSide $cell 7 $xlContinuous $xlMedium }
+        }
+
+        # --- Data rows: main-mark assemblies only ---
+        $mainMarks = @($grp.Group |
+            Where-Object { $_.PartMark -eq $_.Assembly -or $_.RawPartMark -eq $_.Assembly } |
+            Group-Object Assembly |
+            ForEach-Object { $_.Group[0] } |
+            Sort-Object Assembly)
+
+        $dataRow = 6
+        foreach ($part in $mainMarks) {
+            $ws.Rows.Item($dataRow).RowHeight = 16
+
+            # C1: QTY â€” medium left border
+            $ws.Cells.Item($dataRow, 1) = [int]$part.Qty
+            $c1 = $ws.Cells.Item($dataRow, 1)
+            $c1.Font.Name            = "Arial Narrow"
+            $c1.Font.Size            = 11
+            $c1.HorizontalAlignment  = $xlCenter
+            $c1.Interior.ColorIndex  = $xlNoneColorIdx
+            $c1.Borders.LineStyle    = $xlContinuous
+            $c1.Borders.Weight       = $xlThin
+            Set-BorderSide $c1 7 $xlContinuous $xlMedium
+
+            # C2: PART NUMBER â€” medium left border
+            $ws.Cells.Item($dataRow, 2) = [string]$part.PartMark
+            $c2 = $ws.Cells.Item($dataRow, 2)
+            $c2.Font.Name            = "Arial Narrow"
+            $c2.Font.Size            = 11
+            $c2.HorizontalAlignment  = $xlCenter
+            $c2.Interior.ColorIndex  = $xlNoneColorIdx
+            $c2.Borders.LineStyle    = $xlContinuous
+            $c2.Borders.Weight       = $xlThin
+            Set-BorderSide $c2 7 $xlContinuous $xlMedium
+
+            # C3: ITEM DESCRIPTION
+            $ws.Cells.Item($dataRow, 3) = [string]$part.Description
+            $c3 = $ws.Cells.Item($dataRow, 3)
+            $c3.Font.Name            = "Arial Narrow"
+            $c3.Font.Size            = 11
+            $c3.HorizontalAlignment  = $xlLeft
+            $c3.Interior.ColorIndex  = $xlNoneColorIdx
+            $c3.Borders.LineStyle    = $xlContinuous
+            $c3.Borders.Weight       = $xlThin
+
+            for ($cc = 4; $cc -le 13; $cc++) {
+                $cell = $ws.Cells.Item($dataRow, $cc)
+                if ($headerDefs[$cc - 1].Gray) { $cell.Interior.Color = $grayBg } else { $cell.Interior.ColorIndex = $xlNoneColorIdx }
+                $cell.Borders.LineStyle = $xlContinuous
+                $cell.Borders.Weight    = $xlThin
+            }
+
+            # C14-C16: merged notes column, thin borders all around
+            $noteRange = $ws.Range($ws.Cells.Item($dataRow, 14), $ws.Cells.Item($dataRow, 16))
+            $noteRange.Merge()
+            $noteRange.Borders.LineStyle = $xlContinuous
+            $noteRange.Borders.Weight    = $xlThin
+
+            $dataRow++
+        }
+
+        # --- Bottom section (after last data row) ---
+        # Blank separator
+        $ws.Rows.Item($dataRow).RowHeight = 16
+        Set-BorderSide ($ws.Cells.Item($dataRow, 1)) 8 $xlContinuous $xlThin
+        $dataRow++
+
+        # Instructions text: **INITIALS ARE TO BE PLACED...** merged C2:C16
+        $ws.Rows.Item($dataRow).RowHeight = 16
+        $instrRange = $ws.Range($ws.Cells.Item($dataRow, 2), $ws.Cells.Item($dataRow, 16))
+        $instrRange.Merge()
+        $ws.Cells.Item($dataRow, 2).Value2    = "**INITIALS ARE TO BE PLACED IN EACH BOX TO IDENTIFY THE CORRESPONDING ACTIVITY**"
+        $ws.Cells.Item($dataRow, 2).Font.Name = "Arial Narrow"
+        $ws.Cells.Item($dataRow, 2).Font.Size = 9
+        $ws.Cells.Item($dataRow, 2).Font.Bold = $true
+        $dataRow += 3  # skip 2 blank rows
+
+        # Inspector signature row
+        $ws.Rows.Item($dataRow).RowHeight = 16
+        $ws.Range($ws.Cells.Item($dataRow, 1), $ws.Cells.Item($dataRow, 2)).Merge()
+        $ws.Cells.Item($dataRow, 1).Value2    = "Inspector:"
+        $ws.Cells.Item($dataRow, 1).Font.Name = "Arial Narrow"
+        $ws.Cells.Item($dataRow, 1).Font.Bold = $true
+        $sigR1 = $ws.Range($ws.Cells.Item($dataRow, 3), $ws.Cells.Item($dataRow, 5))
+        $sigR1.Merge()
+        Set-BorderSide $sigR1 9 $xlContinuous $xlThin
+        $ws.Cells.Item($dataRow, 8).Value2    = "Date:"
+        $ws.Cells.Item($dataRow, 8).Font.Name = "Arial Narrow"
+        $ws.Cells.Item($dataRow, 8).Font.Bold = $true
+        $dtR1 = $ws.Range($ws.Cells.Item($dataRow, 9), $ws.Cells.Item($dataRow, 10))
+        $dtR1.Merge()
+        Set-BorderSide $dtR1 9 $xlContinuous $xlThin
+        $dataRow += 3  # skip 2 blank rows
+
+        # Production Manager signature row
+        $ws.Rows.Item($dataRow).RowHeight = 16
+        $ws.Range($ws.Cells.Item($dataRow, 1), $ws.Cells.Item($dataRow, 2)).Merge()
+        $ws.Cells.Item($dataRow, 1).Value2    = "Production Manager:"
+        $ws.Cells.Item($dataRow, 1).Font.Name = "Arial Narrow"
+        $ws.Cells.Item($dataRow, 1).Font.Bold = $true
+        $sigR2 = $ws.Range($ws.Cells.Item($dataRow, 3), $ws.Cells.Item($dataRow, 5))
+        $sigR2.Merge()
+        Set-BorderSide $sigR2 9 $xlContinuous $xlThin
+        $ws.Cells.Item($dataRow, 8).Value2    = "Date:"
+        $ws.Cells.Item($dataRow, 8).Font.Name = "Arial Narrow"
+        $ws.Cells.Item($dataRow, 8).Font.Bold = $true
+        $dtR2 = $ws.Range($ws.Cells.Item($dataRow, 9), $ws.Cells.Item($dataRow, 10))
+        $dtR2.Merge()
+        Set-BorderSide $dtR2 9 $xlContinuous $xlThin
+    }
+
+    return $groups.Count
+}
+
+function Write-QualityProcessReport {
+    param(
+        [System.Collections.Generic.List[PSCustomObject]]$MasterData,
+        [string]$ProjectName,
+        [string]$JobNumber,
+        [string]$QprJobNumber,  # Job number for sheet naming
+        [string]$GroupBy  # "TL", "Assembly", or "Sequence"
+    )
+
+    $xlApp = New-Object -ComObject Excel.Application
+    $xlApp.Visible = $false
+    $xlApp.DisplayAlerts = $false
+    $xlApp.ScreenUpdating = $false
+
+    try {
+        $wb = $xlApp.Workbooks.Add()
+        while ($wb.Sheets.Count -gt 1) { $wb.Sheets.Item($wb.Sheets.Count).Delete() }
+
+        $made = @(Add-QualityProcessSheets -Workbook $wb -MasterData $MasterData -QprJobNumber $QprJobNumber -GroupBy $GroupBy -ReuseFirstSheet $true)[-1]
+        if (-not $made) { $wb.Close($false); return $null }
+
+        # Save
+        $safeProjectName = $ProjectName -replace '[\\/:*?"<>|]', '_'
+        $stamp   = Get-Date -Format "yyyyMMdd-HHmmss"
+        $qprPath = Join-Path (Get-Location) "$safeProjectName - Job $JobNumber - QPR $stamp.xlsx"
+        if (Test-Path $qprPath) { Remove-Item $qprPath -Force -ErrorAction SilentlyContinue }
+        $wb.Sheets.Item(1).Activate()
+        $wb.SaveAs($qprPath)
+        $wb.Close($false)
+
+        Write-Log "Quality Process Report saved to:" "Green"
+        Write-Log " -> $qprPath" "Yellow"
+        return $qprPath
+    }
+    finally {
+        $xlApp.Quit()
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($xlApp) | Out-Null
+        [gc]::Collect()
+        [gc]::WaitForPendingFinalizers()
+    }
+}
+
+
+# --- QPR OPTIONS (asked here so the QPR can also become tabs in this workbook) ---
+Write-Host ""
+Write-Host "========================================================"
+Write-Host "  QUALITY PROCESS REPORT (QPR) OPTIONS"
+Write-Host "========================================================"
+Write-Host "  [Y]es: Generate detailed shop floor quality/inspection sheets (added as tabs in the BOM workbook and saved as a separate QPR workbook)"
+Write-Host "  [N]o: Skip QPR generation (default)"
+Write-Host ""
+$qprChoice = Read-Host "Generate Quality Process Report (QPR)? [Y]es / [N]o (default: No)"
+if ($qprChoice -match '^(y|yes)$') {
+    Write-Host ""
+    Write-Host "  Job name for the QPR (used as the sheet prefix and printed in the Job: box on each sheet)"
+    Write-Host "  Example: enter '25-351' -> sheets named '25-351 - TL1282', '25-351 - TL1296', etc."
+    $qprJobInput = Read-Host "Job name (default: $jobNumber)"
+    $qprJobNumber = if ($qprJobInput) { $qprJobInput } else { $jobNumber }
+
+    Write-Host ""
+    Write-Host "  QPR Sheet Organization:"
+    Write-Host "  [T]L (default): Organize by Transmittal number"
+    Write-Host "    Sheets: $qprJobNumber - TL1282 | $qprJobNumber - TL1296 | $qprJobNumber - TL1301"
+    Write-Host "    Use for: Manufacturing by transmittal/revision phase"
+    Write-Host ""
+    Write-Host "  [S]equence: Organize by Sequence (first 4 digits of assembly), still labeled with the TL"
+    Write-Host "    Sheets: $qprJobNumber - TL1296 - 5131 | $qprJobNumber - TL1296 - 5132 | $qprJobNumber - TL1313 - 5133"
+    Write-Host "    Use for: Manufacturing by structural family/sequence"
+    Write-Host ""
+    $qprGroupChoice = Read-Host "Organize sheets by [T]L number (default) or [S]equence?"
+    $qprGroupBy = if ($qprGroupChoice -match '^(s|sequence)$') { "Sequence" } else { "TL" }
+}
+
 # --- TAB: FOLDER LABELS (only when a Required Assm workbook was chosen) ---
 if ($requiredAssmPath) {
     Write-Log "Building Folder Labels tab from $([System.IO.Path]::GetFileName($requiredAssmPath))..."
@@ -4258,6 +4671,18 @@ if ($modeChoice -ne "2") {
     }
     catch {
         Write-Log "Could not build the TERRA Work Order tab: $($_.Exception.Message)" "Red"
+    }
+}
+
+# --- TABS: QPR (one per TL, or per TL + sequence; Job: box follows Settings, due / paint line follows Sequence Notes) ---
+if ($qprChoice -match '^(y|yes)$') {
+    Write-Log "Building QPR tab(s) in the BOM workbook..."
+    try {
+        $qprTabs = @(Add-QualityProcessSheets -Workbook $workbook -MasterData $masterData -QprJobNumber $qprJobNumber -GroupBy $qprGroupBy -Linked $true -CustomerJob $jobNumber -HasSequenceNotes ($modeChoice -ne "2"))[-1]
+        Write-Log "QPR tab(s) ready: $qprTabs ($qprGroupBy)." "Green"
+    }
+    catch {
+        Write-Log "Could not build the QPR tabs: $($_.Exception.Message)" "Red"
     }
 }
 
@@ -4350,371 +4775,10 @@ if ($scriptSets.Count -gt 0) {
 
 
 
-function Write-QualityProcessReport {
-    param(
-        [System.Collections.Generic.List[PSCustomObject]]$MasterData,
-        [string]$ProjectName,
-        [string]$JobNumber,
-        [string]$QprJobNumber,  # Job number for sheet naming
-        [string]$GroupBy  # "TL", "Assembly", or "Sequence"
-    )
-
-    $xlContinuous    = 1
-    $xlThin          = 2
-    $xlMedium        = -4138
-    $xlNoneColorIdx  = -4142
-    $xlCenter        = -4108
-    $xlBottom        = -4107
-    $xlLeft          = -4131
-    $xlHoriz         = -4128
-    $grayBg          = 14277081
-
-    # Helper: set a single border side by literal index (avoids variable-cast COM error)
-    # Uses the Range's BorderAround trick: set all borders then we handle sides separately via
-    # individual cell references. For targeted single-side ops we call this small helper.
-    function Set-BorderSide ($cellOrRange, [int]$side, [int]$style, [int]$weight) {
-        # $side: 7=left 8=top 9=bottom 10=right
-        try {
-            $bd = $cellOrRange.Borders.Item($side)
-            $bd.LineStyle = $style
-            $bd.Weight    = $weight
-        } catch {
-            # fallback: skip per-side tweak if COM refuses
-        }
-    }
-
-    if ($GroupBy -eq "TL") {
-        $groups = @($MasterData | Group-Object TL | Sort-Object Name)
-    } elseif ($GroupBy -eq "Sequence") {
-        # One sheet per TL + sequence (first 4 digits of assembly), so the sequence sheets still say which TL they came from
-        $groups = @($MasterData | Group-Object {
-            $assm = $_.Assembly
-            $seq = if ($assm -match '^(\d{4})') { $Matches[1] } else { $assm.Substring(0, [Math]::Min(4, $assm.Length)) }
-            "$($_.TL)`t$seq"
-        } | Sort-Object Name)
-    } else {
-        $groups = @($MasterData | Group-Object Assembly | Sort-Object Name)
-    }
-
-    if ($groups.Count -eq 0) {
-        Write-Log "No data found for Quality Process Report." "Yellow"
-        return $null
-    }
-
-    $xlApp = New-Object -ComObject Excel.Application
-    $xlApp.Visible = $false
-    $xlApp.DisplayAlerts = $false
-    $xlApp.ScreenUpdating = $false
-
-    try {
-        $wb = $xlApp.Workbooks.Add()
-        while ($wb.Sheets.Count -gt 1) { $wb.Sheets.Item($wb.Sheets.Count).Delete() }
-
-        $headerDefs = @(
-            [PSCustomObject]@{ Col=1;  Label="QTY";               Orient=$xlHoriz; Gray=$false; Va=$xlCenter; ThickL=$true  }
-            [PSCustomObject]@{ Col=2;  Label="PART #";             Orient=$xlHoriz; Gray=$false; Va=$xlCenter; ThickL=$true  }
-            [PSCustomObject]@{ Col=3;  Label="ITEM DESCRIPTION";   Orient=$xlHoriz; Gray=$false; Va=$xlCenter; ThickL=$false }
-            [PSCustomObject]@{ Col=4;  Label="MATERIAL SIZE";      Orient=45;       Gray=$true;  Va=$xlBottom; ThickL=$false }
-            [PSCustomObject]@{ Col=5;  Label="CUT LENGTH";         Orient=45;       Gray=$false; Va=$xlBottom; ThickL=$false }
-            [PSCustomObject]@{ Col=6;  Label="HOLE SIZE";          Orient=45;       Gray=$true;  Va=$xlBottom; ThickL=$false }
-            [PSCustomObject]@{ Col=7;  Label="LAYOUT";             Orient=45;       Gray=$false; Va=$xlBottom; ThickL=$false }
-            [PSCustomObject]@{ Col=8;  Label="FIT-UP";             Orient=45;       Gray=$true;  Va=$xlBottom; ThickL=$false }
-            [PSCustomObject]@{ Col=9;  Label="WELD SIZE";          Orient=45;       Gray=$false; Va=$xlBottom; ThickL=$false }
-            [PSCustomObject]@{ Col=10; Label="WELDER I.D. STAMP";  Orient=45;       Gray=$true;  Va=$xlBottom; ThickL=$false }
-            [PSCustomObject]@{ Col=11; Label="PART NUMBER STAMP";  Orient=45;       Gray=$false; Va=$xlBottom; ThickL=$false }
-            [PSCustomObject]@{ Col=12; Label="SURFACE PREP.";      Orient=45;       Gray=$true;  Va=$xlBottom; ThickL=$false }
-            [PSCustomObject]@{ Col=13; Label="COATING";            Orient=45;       Gray=$false; Va=$xlBottom; ThickL=$false }
-        )
-
-        $sheetIndex = 0
-        foreach ($grp in $groups) {
-            $sheetIndex++
-            # Sheet / job label: {job} - {TL}, or {job} - {TL} - {sequence} when grouped by sequence
-            $labelParts = @()
-            if ($QprJobNumber) { $labelParts += $QprJobNumber }
-            if ($GroupBy -eq "Sequence") {
-                $seqTl, $seqNum = $grp.Name -split "`t", 2
-                if ($seqTl) { $labelParts += $seqTl }
-                $labelParts += $seqNum
-            }
-            else {
-                $labelParts += $(if ($grp.Name) { $grp.Name } else { "(No TL)" })
-            }
-            $jobLabel  = $labelParts -join " - "
-            $sheetName = ($jobLabel -replace '[\\\/\?\*\[\]\:]', '_')
-            if ($sheetName.Length -gt 31) { $sheetName = $sheetName.Substring(0, 31) }
-
-            $ws = if ($sheetIndex -eq 1) {
-                $wb.Sheets.Item(1)
-            } else {
-                $wb.Sheets.Add([Type]::Missing, $wb.Sheets.Item($wb.Sheets.Count))
-            }
-            $ws.Name = $sheetName
-
-            # Column widths
-            $ws.Columns.Item(1).ColumnWidth  = 6
-            $ws.Columns.Item(2).ColumnWidth  = 10
-            $ws.Columns.Item(3).ColumnWidth  = 30
-            for ($c = 4; $c -le 16; $c++) { $ws.Columns.Item($c).ColumnWidth = 6 }
-            $ws.Columns.Item(17).ColumnWidth = 3.43
-
-            $ps = $ws.PageSetup
-            $ps.Orientation   = 2
-            $ps.Zoom          = $false
-            $ps.FitToPagesWide = 1
-            $ps.FitToPagesTall = $false
-            $ps.LeftMargin    = 7.2
-            $ps.RightMargin   = 7.2
-            $ps.TopMargin     = 7.2
-            $ps.BottomMargin  = 7.2
-            $ps.HeaderMargin  = 0
-            $ps.FooterMargin  = 0
-            $ps.CenterHeader  = ""
-            $ps.LeftHeader    = ""
-            $ps.RightHeader   = ""
-            $ps.CenterFooter  = ""
-            $ps.LeftFooter    = ""
-            $ps.RightFooter   = ""
-
-            # Row heights
-            $ws.Rows.Item(1).RowHeight = 16.5
-            $ws.Rows.Item(2).RowHeight = 16.5
-            $ws.Rows.Item(3).RowHeight = 16.5
-            $ws.Rows.Item(4).RowHeight = 21.75
-            $ws.Rows.Item(5).RowHeight = 74.25
-
-            # --- Title R1C3:R3C11 ---
-            $ws.Range($ws.Cells.Item(1,3), $ws.Cells.Item(3,11)).Merge()
-            $ws.Cells.Item(1,3).Value2              = "          PROJECT QUALITY PROCESS REPORT"
-            $ws.Cells.Item(1,3).Font.Name           = "Arial Narrow"
-            $ws.Cells.Item(1,3).Font.Size           = 16
-            $ws.Cells.Item(1,3).Font.Bold           = $true
-            $ws.Cells.Item(1,3).HorizontalAlignment = $xlLeft
-            $ws.Cells.Item(1,3).VerticalAlignment   = $xlCenter
-
-            # Job Number label R1C12:C13, value R1C14:C16 with bottom underline
-            $ws.Range($ws.Cells.Item(1,12), $ws.Cells.Item(1,13)).Merge()
-            $ws.Cells.Item(1,12).Value2    = "Job:"
-            $ws.Cells.Item(1,12).Font.Name = "Arial Narrow"
-            $ws.Cells.Item(1,12).Font.Bold = $true
-            $jnRange = $ws.Range($ws.Cells.Item(1,14), $ws.Cells.Item(1,16))
-            $jnRange.Merge()
-            $ws.Cells.Item(1,14).Value2    = $jobLabel   # mirrors the sheet name (Excel cuts sheet names at 31 characters, this cell does not)
-            $ws.Cells.Item(1,14).Font.Name = "Arial Narrow"
-            $jnRange.ShrinkToFit = $true
-            Set-BorderSide $jnRange 9 $xlContinuous $xlThin   # bottom underline
-
-            # Inspector R2C12:C13, write-in area R2C14:C16 top+bottom lines
-            $ws.Range($ws.Cells.Item(2,12), $ws.Cells.Item(2,13)).Merge()
-            $ws.Cells.Item(2,12).Value2    = "Inspector:"
-            $ws.Cells.Item(2,12).Font.Name = "Arial Narrow"
-            $ws.Cells.Item(2,12).Font.Bold = $true
-            $insRange = $ws.Range($ws.Cells.Item(2,14), $ws.Cells.Item(2,16))
-            $insRange.Merge()
-            Set-BorderSide $insRange 8 $xlContinuous $xlThin   # top
-            Set-BorderSide $insRange 9 $xlContinuous $xlThin   # bottom
-
-            # Date R3C12:C13, write-in area R3C14:C16 top+bottom lines
-            $ws.Range($ws.Cells.Item(3,12), $ws.Cells.Item(3,13)).Merge()
-            $ws.Cells.Item(3,12).Value2    = "Date:"
-            $ws.Cells.Item(3,12).Font.Name = "Arial Narrow"
-            $ws.Cells.Item(3,12).Font.Bold = $true
-            $dtRange = $ws.Range($ws.Cells.Item(3,14), $ws.Cells.Item(3,16))
-            $dtRange.Merge()
-            Set-BorderSide $dtRange 8 $xlContinuous $xlThin    # top
-            Set-BorderSide $dtRange 9 $xlContinuous $xlThin    # bottom
-
-            # --- Row 4 separator: medium bottom border across C3:C12 and C13:C16 ---
-            $sep1 = $ws.Range($ws.Cells.Item(4,3), $ws.Cells.Item(4,12))
-            $sep1.Merge()
-            Set-BorderSide $sep1 9 $xlContinuous $xlMedium
-            $sep2 = $ws.Range($ws.Cells.Item(4,13), $ws.Cells.Item(4,16))
-            $sep2.Merge()
-            Set-BorderSide $sep2 9 $xlContinuous $xlMedium
-
-            # --- Header row 5 ---
-            foreach ($hd in $headerDefs) {
-                $cell = $ws.Cells.Item(5, $hd.Col)
-                $cell.Value2              = $hd.Label
-                $cell.Font.Name          = "Arial Narrow"
-                $cell.Font.Size          = 10
-                $cell.Font.Bold          = $true
-                $cell.Orientation        = $hd.Orient
-                $cell.VerticalAlignment  = $hd.Va
-                $cell.HorizontalAlignment = $xlCenter
-                $cell.WrapText           = $false
-                if ($hd.Gray) {
-                    $cell.Interior.Color = $grayBg
-                } else {
-                    $cell.Interior.ColorIndex = $xlNoneColorIdx
-                }
-                $cell.Borders.LineStyle = $xlContinuous
-                $cell.Borders.Weight    = $xlThin
-                if ($hd.ThickL) { Set-BorderSide $cell 7 $xlContinuous $xlMedium }
-            }
-
-            # --- Data rows: main-mark assemblies only ---
-            $mainMarks = @($grp.Group |
-                Where-Object { $_.PartMark -eq $_.Assembly -or $_.RawPartMark -eq $_.Assembly } |
-                Group-Object Assembly |
-                ForEach-Object { $_.Group[0] } |
-                Sort-Object Assembly)
-
-            $dataRow = 6
-            foreach ($part in $mainMarks) {
-                $ws.Rows.Item($dataRow).RowHeight = 16
-
-                # C1: QTY â€” medium left border
-                $ws.Cells.Item($dataRow, 1) = [int]$part.Qty
-                $c1 = $ws.Cells.Item($dataRow, 1)
-                $c1.Font.Name            = "Arial Narrow"
-                $c1.Font.Size            = 11
-                $c1.HorizontalAlignment  = $xlCenter
-                $c1.Interior.ColorIndex  = $xlNoneColorIdx
-                $c1.Borders.LineStyle    = $xlContinuous
-                $c1.Borders.Weight       = $xlThin
-                Set-BorderSide $c1 7 $xlContinuous $xlMedium
-
-                # C2: PART NUMBER â€” medium left border
-                $ws.Cells.Item($dataRow, 2) = [string]$part.PartMark
-                $c2 = $ws.Cells.Item($dataRow, 2)
-                $c2.Font.Name            = "Arial Narrow"
-                $c2.Font.Size            = 11
-                $c2.HorizontalAlignment  = $xlCenter
-                $c2.Interior.ColorIndex  = $xlNoneColorIdx
-                $c2.Borders.LineStyle    = $xlContinuous
-                $c2.Borders.Weight       = $xlThin
-                Set-BorderSide $c2 7 $xlContinuous $xlMedium
-
-                # C3: ITEM DESCRIPTION
-                $ws.Cells.Item($dataRow, 3) = [string]$part.Description
-                $c3 = $ws.Cells.Item($dataRow, 3)
-                $c3.Font.Name            = "Arial Narrow"
-                $c3.Font.Size            = 11
-                $c3.HorizontalAlignment  = $xlLeft
-                $c3.Interior.ColorIndex  = $xlNoneColorIdx
-                $c3.Borders.LineStyle    = $xlContinuous
-                $c3.Borders.Weight       = $xlThin
-
-                for ($cc = 4; $cc -le 13; $cc++) {
-                    $cell = $ws.Cells.Item($dataRow, $cc)
-                    if ($headerDefs[$cc - 1].Gray) { $cell.Interior.Color = $grayBg } else { $cell.Interior.ColorIndex = $xlNoneColorIdx }
-                    $cell.Borders.LineStyle = $xlContinuous
-                    $cell.Borders.Weight    = $xlThin
-                }
-
-                # C14-C16: merged notes column, thin borders all around
-                $noteRange = $ws.Range($ws.Cells.Item($dataRow, 14), $ws.Cells.Item($dataRow, 16))
-                $noteRange.Merge()
-                $noteRange.Borders.LineStyle = $xlContinuous
-                $noteRange.Borders.Weight    = $xlThin
-
-                $dataRow++
-            }
-
-            # --- Bottom section (after last data row) ---
-            # Blank separator
-            $ws.Rows.Item($dataRow).RowHeight = 16
-            Set-BorderSide ($ws.Cells.Item($dataRow, 1)) 8 $xlContinuous $xlThin
-            $dataRow++
-
-            # Instructions text: **INITIALS ARE TO BE PLACED...** merged C2:C16
-            $ws.Rows.Item($dataRow).RowHeight = 16
-            $instrRange = $ws.Range($ws.Cells.Item($dataRow, 2), $ws.Cells.Item($dataRow, 16))
-            $instrRange.Merge()
-            $ws.Cells.Item($dataRow, 2).Value2    = "**INITIALS ARE TO BE PLACED IN EACH BOX TO IDENTIFY THE CORRESPONDING ACTIVITY**"
-            $ws.Cells.Item($dataRow, 2).Font.Name = "Arial Narrow"
-            $ws.Cells.Item($dataRow, 2).Font.Size = 9
-            $ws.Cells.Item($dataRow, 2).Font.Bold = $true
-            $dataRow += 3  # skip 2 blank rows
-
-            # Inspector signature row
-            $ws.Rows.Item($dataRow).RowHeight = 16
-            $ws.Range($ws.Cells.Item($dataRow, 1), $ws.Cells.Item($dataRow, 2)).Merge()
-            $ws.Cells.Item($dataRow, 1).Value2    = "Inspector:"
-            $ws.Cells.Item($dataRow, 1).Font.Name = "Arial Narrow"
-            $ws.Cells.Item($dataRow, 1).Font.Bold = $true
-            $sigR1 = $ws.Range($ws.Cells.Item($dataRow, 3), $ws.Cells.Item($dataRow, 5))
-            $sigR1.Merge()
-            Set-BorderSide $sigR1 9 $xlContinuous $xlThin
-            $ws.Cells.Item($dataRow, 8).Value2    = "Date:"
-            $ws.Cells.Item($dataRow, 8).Font.Name = "Arial Narrow"
-            $ws.Cells.Item($dataRow, 8).Font.Bold = $true
-            $dtR1 = $ws.Range($ws.Cells.Item($dataRow, 9), $ws.Cells.Item($dataRow, 10))
-            $dtR1.Merge()
-            Set-BorderSide $dtR1 9 $xlContinuous $xlThin
-            $dataRow += 3  # skip 2 blank rows
-
-            # Production Manager signature row
-            $ws.Rows.Item($dataRow).RowHeight = 16
-            $ws.Range($ws.Cells.Item($dataRow, 1), $ws.Cells.Item($dataRow, 2)).Merge()
-            $ws.Cells.Item($dataRow, 1).Value2    = "Production Manager:"
-            $ws.Cells.Item($dataRow, 1).Font.Name = "Arial Narrow"
-            $ws.Cells.Item($dataRow, 1).Font.Bold = $true
-            $sigR2 = $ws.Range($ws.Cells.Item($dataRow, 3), $ws.Cells.Item($dataRow, 5))
-            $sigR2.Merge()
-            Set-BorderSide $sigR2 9 $xlContinuous $xlThin
-            $ws.Cells.Item($dataRow, 8).Value2    = "Date:"
-            $ws.Cells.Item($dataRow, 8).Font.Name = "Arial Narrow"
-            $ws.Cells.Item($dataRow, 8).Font.Bold = $true
-            $dtR2 = $ws.Range($ws.Cells.Item($dataRow, 9), $ws.Cells.Item($dataRow, 10))
-            $dtR2.Merge()
-            Set-BorderSide $dtR2 9 $xlContinuous $xlThin
-        }
-
-        # Save
-        $safeProjectName = $ProjectName -replace '[\\/:*?"<>|]', '_'
-        $stamp   = Get-Date -Format "yyyyMMdd-HHmmss"
-        $qprPath = Join-Path (Get-Location) "$safeProjectName - Job $JobNumber - QPR $stamp.xlsx"
-        if (Test-Path $qprPath) { Remove-Item $qprPath -Force -ErrorAction SilentlyContinue }
-        $wb.Sheets.Item(1).Activate()
-        $wb.SaveAs($qprPath)
-        $wb.Close($false)
-
-        Write-Log "Quality Process Report saved to:" "Green"
-        Write-Log " -> $qprPath" "Yellow"
-        return $qprPath
-    }
-    finally {
-        $xlApp.Quit()
-        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($xlApp) | Out-Null
-        [gc]::Collect()
-        [gc]::WaitForPendingFinalizers()
-    }
-}
-
-
 # =====================================================================
-# 6. OPTIONAL: QUALITY PROCESS REPORT
+# 6. OPTIONAL: QUALITY PROCESS REPORT (standalone workbook; the questions were asked before the BOM workbook was built)
 # =====================================================================
 
-Write-Host ""
-Write-Host "========================================================"
-Write-Host "  QUALITY PROCESS REPORT (QPR) OPTIONS"
-Write-Host "========================================================"
-Write-Host "  [Y]es: Generate detailed shop floor quality/inspection sheets"
-Write-Host "  [N]o: Skip QPR generation (default)"
-Write-Host ""
-$qprChoice = Read-Host "Generate Quality Process Report (QPR)? [Y]es / [N]o (default: No)"
 if ($qprChoice -match '^(y|yes)$') {
-    Write-Host ""
-    Write-Host "  Job name for the QPR (used as the sheet prefix and printed in the Job: box on each sheet)"
-    Write-Host "  Example: enter '25-351' -> sheets named '25-351 - TL1282', '25-351 - TL1296', etc."
-    $qprJobInput = Read-Host "Job name (default: $jobNumber)"
-    $qprJobNumber = if ($qprJobInput) { $qprJobInput } else { $jobNumber }
-
-    Write-Host ""
-    Write-Host "  QPR Sheet Organization:"
-    Write-Host "  [T]L (default): Organize by Transmittal number"
-    Write-Host "    Sheets: $qprJobNumber - TL1282 | $qprJobNumber - TL1296 | $qprJobNumber - TL1301"
-    Write-Host "    Use for: Manufacturing by transmittal/revision phase"
-    Write-Host ""
-    Write-Host "  [S]equence: Organize by Sequence (first 4 digits of assembly), still labeled with the TL"
-    Write-Host "    Sheets: $qprJobNumber - TL1296 - 5131 | $qprJobNumber - TL1296 - 5132 | $qprJobNumber - TL1313 - 5133"
-    Write-Host "    Use for: Manufacturing by structural family/sequence"
-    Write-Host ""
-    $qprGroupChoice = Read-Host "Organize sheets by [T]L number (default) or [S]equence?"
-    $qprGroupBy = if ($qprGroupChoice -match '^(s|sequence)$') { "Sequence" } else { "TL" }
-
     Write-QualityProcessReport -MasterData $masterData -ProjectName $projectName -JobNumber $jobNumber -QprJobNumber $qprJobNumber -GroupBy $qprGroupBy
 }

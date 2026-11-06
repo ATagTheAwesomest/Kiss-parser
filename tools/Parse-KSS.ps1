@@ -5229,11 +5229,20 @@ $usedWorkbookFilter = $false
 if ($workbookTLs.Count -gt 0 -and $modeChoice -ne "2") {
     # A Required Assm workbook is the filter: its assemblies, per transmittal (REV columns included), are the run.
     Write-Section "Assembly filter (from the Required Assm workbook)"
-    if ($updateMode) {
-        # Every transmittal in the workbook is part of the job. One that has no .kss file selected (it came without one) is placed
-        # by its assembly numbers from the files that are selected.
-        $haveNums = @($allTLs | ForEach-Object { [int]($_ -replace '\D', '0') })
-        $extraTLs = @($workbookTLs | Where-Object { $haveNums -notcontains [int]$_.Number } | Sort-Object Number)
+    $extraTLs = @()
+    # A transmittal that is in the workbook but has no .kss file (a rev that came without one) is part of the run: it is placed by its
+    # assembly numbers from the selected files. A transmittal whose .kss exists in the folder but was not ticked stays out (an update
+    # takes every transmittal of the workbook).
+    $haveNums = @($allTLs | ForEach-Object { [int]($_ -replace '\D', '0') })
+    $folderNums = @()
+    if (-not $updateMode) {
+        $kssDirs = @($kssFiles | ForEach-Object { Split-Path -Parent $_.FullName } | Select-Object -Unique)
+        if ($kssDirs.Count -eq 0) { $kssDirs = @((Get-Location).Path) }
+        $folderNums = @($kssDirs | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter *.kss -File -ErrorAction SilentlyContinue } |
+            ForEach-Object { Get-TransmittalFromName $_.Name } | Where-Object { $_ } | ForEach-Object { [int]($_ -replace '\D', '0') })
+    }
+    $extraTLs = @($workbookTLs | Where-Object { $haveNums -notcontains [int]$_.Number -and $folderNums -notcontains [int]$_.Number } | Sort-Object Number)
+    if ($true) {
         if ($extraTLs.Count -gt 0) {
             $allTLs = @($allTLs) + @($extraTLs | ForEach-Object { $_.TL })
             Write-Log "In the Required Assm workbook with no .kss file of their own: $(($extraTLs | ForEach-Object { $_.TL }) -join ', '). Their assemblies are taken from the selected .kss files." "Cyan"
@@ -5283,6 +5292,14 @@ if ($workbookTLs.Count -gt 0 -and $modeChoice -ne "2") {
             $laborData = $whitelistResult.LaborData
             $assemblyDrawings = $whitelistResult.AssemblyDrawings
             $usedWorkbookFilter = $true
+            foreach ($x in $extraTLs) {
+                $xAsm = @($x.SeqAssemblies.Values | ForEach-Object { $_ } | Sort-Object -Unique)
+                $xMissing = @($xAsm | Where-Object { $whitelistResult.Missing -contains $_ })
+                Write-Log "$($x.TL) (no .kss): $($xAsm.Count - $xMissing.Count) of $($xAsm.Count) assemblies found in the selected files." "Cyan"
+                if ($xMissing.Count -gt 0) {
+                    Write-Log "$($x.TL): NO .kss DATA for $($xMissing.Count) assembly(ies), so they are NOT in the output: $(($xMissing | Select-Object -First 15) -join ', ')$(if ($xMissing.Count -gt 15) { ' ...' }). Select the .kss that holds them." "Red"
+                }
+            }
         }
     }
 }

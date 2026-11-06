@@ -1444,6 +1444,7 @@ function Add-SequenceNotesSheet {
     $sheet.Cells.Font.Name = "Arial"
     $n = @($Rows).Count
     $sheet.Range("B2:G$($n + 2)").NumberFormat = "@"       # typed dates stay text, so the labels print them as typed
+    $sheet.Range("H2:M$($n + 2)").NumberFormat = "General"  # formula columns (label notes, due, paint) are never Text
     # Everything goes down in ONE array write (header row, data, formulas, note): in Windows PowerShell a single-cell Value2
     # write followed by an array write on the same sheet throws InvalidCastException.
     # A:I as before; J = the sequence's Explanation (TL Notes tab); K:L are filled in by Add-SequenceNotesExceptionColumns when ASSM exceptions exist
@@ -1614,6 +1615,8 @@ function Add-SequenceNotesExceptionColumns {
         $f[$i, 1] = "=COUNTIFS(Exc_FolderKey,A$x,Exc_Status,`"Exception set`")"
         $f[$i, 2] = "=IFERROR(INDEX(Exc_Paint,MATCH(A$x,Exc_FolderKey,0))&`"`",`"`")"
     }
+    # These columns must be General: a Text-formatted cell keeps a formula as plain text, and the folder label would then print the formula itself
+    $sheet.Range("H2:M$last").NumberFormat = "General"
     # H is the label notes (rewritten with the exception text), K:L are new
     for ($i = 0; $i -lt $RowCount; $i++) { $sheet.Cells.Item($i + 2, 8).Formula = $f[$i, 0] }
     $sheet.Cells.Item(1, 11).Value2 = "Exception ASSMs"
@@ -1622,6 +1625,14 @@ function Add-SequenceNotesExceptionColumns {
         $sheet.Cells.Item($i + 2, 11).Formula = $f[$i, 1]
         $sheet.Cells.Item($i + 2, 12).Formula = $f[$i, 2]
         $sheet.Cells.Item($i + 2, 13).Formula = $f[$i, 3]
+    }
+    # Check: any cell that still holds a formula as text is written again as a real formula
+    $fix = @(@(8, 0), @(11, 1), @(12, 2), @(13, 3))
+    for ($i = 0; $i -lt $RowCount; $i++) {
+        foreach ($c in $fix) {
+            $cell = $sheet.Cells.Item($i + 2, $c[0])
+            if (-not $cell.HasFormula) { $cell.NumberFormat = "General"; $cell.Formula = $f[$i, $c[1]] }
+        }
     }
     $hdr = $sheet.Range("K1:L1")
     $hdr.Font.Bold = $true

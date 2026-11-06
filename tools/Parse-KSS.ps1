@@ -4275,12 +4275,16 @@ function Get-EditState {
     return 'Conflict'
 }
 
-function Get-KissStatePath ([string]$WorkbookPath) { return [System.IO.Path]::ChangeExtension($WorkbookPath, '.kiss.json') }
+# Saved as a hidden file with its own extension, so it is never mistaken for the KISS (.kss) file.
+function Get-KissStatePath ([string]$WorkbookPath) { return [System.IO.Path]::ChangeExtension($WorkbookPath, '.kiss-state') }
 
 # The "last build" record saved next to every workbook: which .kss files were used and what the inputs said then.
 function Read-KissState ([string]$WorkbookPath) {
     $p = Get-KissStatePath $WorkbookPath
-    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    if (-not (Test-Path -LiteralPath $p -ErrorAction SilentlyContinue)) {
+        $p = [System.IO.Path]::ChangeExtension($WorkbookPath, '.kiss.json')      # the first version of the record used this name
+        if (-not (Test-Path -LiteralPath $p)) { return $null }
+    }
     try { $j = [System.IO.File]::ReadAllText($p) | ConvertFrom-Json } catch { return $null }
     if (-not $j -or -not $j.Version) { return $null }
     $seq = @{}; $exc = @{}; $set = @{}; $sched = @{}; $files = @{}
@@ -4317,7 +4321,12 @@ function Save-KissState {
         Sched = @(foreach ($k in $Fresh.Sched.Keys) { @{ K = $k; V = "$($Fresh.Sched[$k])" } })
     }
     $json = $state | ConvertTo-Json -Depth 5
-    [System.IO.File]::WriteAllText((Get-KissStatePath $WorkbookPath), $json, (New-Object System.Text.UTF8Encoding($false)))
+    $statePath = Get-KissStatePath $WorkbookPath
+    if (Test-Path -LiteralPath $statePath) { (Get-Item -LiteralPath $statePath -Force).Attributes = 'Normal' }
+    [System.IO.File]::WriteAllText($statePath, $json, (New-Object System.Text.UTF8Encoding($false)))
+    try { (Get-Item -LiteralPath $statePath -Force).Attributes = 'Hidden' } catch { }
+    $legacy = [System.IO.Path]::ChangeExtension($WorkbookPath, '.kiss.json')
+    if (Test-Path -LiteralPath $legacy) { Remove-Item -LiteralPath $legacy -Force -ErrorAction SilentlyContinue }
 }
 
 # What the inputs say right now for every value that can be edited by hand in the workbook.
@@ -5057,6 +5066,7 @@ else {
     $allTLs = @($kssFiles | ForEach-Object { $_.TL } | Where-Object { $_ } | Select-Object -Unique)
     Write-Log "Processing $($kssFiles.Count) KSS file(s)..."
     $headerLocked = $false
+    $script:ShapeRepairs = 0; $script:BlankShapes = 0
 
     foreach ($file in $kssFiles) {
         $currentAssembly = ""
@@ -5135,6 +5145,38 @@ else {
                     $finish = if ($parts.Length -ge 11) { $parts[10].Trim() } else { "" }
                     $desc = if ($parts.Length -ge 12) { $parts[11].Trim() } else { "" }
 
+                    # Some exports write a bolt with no shape and the whole description in the size field ("HSB 3/4x1-3/4 A325", mark
+                    # "HSB_3/4X1-3/4_A3", length 0). KISS / ProNest reject that ("Invalid Shape ()"), so it is written like the other bolts:
+                    # shape HSB, size 3/4X1-3/4, grade A325, length from the bolt size, no part mark.
+                    if (-not $shape) {
+                        $fix = $null
+                        foreach ($probe in @($size, $desc, $rawPartMark)) {
+                            if ("$probe" -match '^\s*([A-Za-z]{2,5})[ _]+(\d[\dA-Za-z/.\-]*)(?:[ _]+([A-Za-z]{1,3}\d{2,4}\w*))?\s*$') { $fix = $Matches; break }
+                        }
+                        if ($fix) {
+                            $shape = $fix[1].ToUpper()
+                            $size = $fix[2].ToUpper()
+                            if (-not $grade -and $fix[3]) { $grade = $fix[3].ToUpper() }
+                            $lenNum = 0.0
+                            if (-not [double]::TryParse($length, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$lenNum) -or $lenNum -le 0) {
+                                $lastDim = ($size -split 'X')[-1]
+                                $inches = 0.0
+                                foreach ($piece in ($lastDim -split '-')) {
+                                    if ($piece -match '^(\d+)/(\d+)$') { $inches += [double]$Matches[1] / [double]$Matches[2] }
+                                    elseif ($piece -match '^\d+(\.\d+)?$') { $inches += [double]::Parse($piece, [System.Globalization.CultureInfo]::InvariantCulture) }
+                                }
+                                if ($inches -gt 0) { $length = ($inches * 25.4).ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture) }
+                            }
+                            $rawPartMark = ""
+                            $script:ShapeRepairs++
+                            if ($script:ShapeRepairs -le 3) { Write-Log "Blank shape repaired in $($file.Name): assembly $assm now $shape $size $grade (length $length)." "Yellow" }
+                        }
+                        else {
+                            $script:BlankShapes++
+                            if ($script:BlankShapes -le 5) { Write-Log "WARNING: $($file.Name) assembly $assm part '$rawPartMark' has no shape; KISS import will reject it." "Red" }
+                        }
+                    }
+
                     # Format part mark for loose hardware items with blank mark fields
                     $effectiveMark = $rawPartMark
                     if (-not $effectiveMark) {
@@ -5194,6 +5236,8 @@ else {
         }
     }
 
+    if ($script:ShapeRepairs -gt 3) { Write-Log "Blank shape repaired on $($script:ShapeRepairs) record(s) in total." "Yellow" }
+    if ($script:BlankShapes -gt 0) { Write-Log "$($script:BlankShapes) record(s) have no shape and could not be repaired; they will fail to import." "Red" }
     if ($masterData.Count -eq 0) {
         Write-Log "No valid part data found in the KSS files." "Red"
         return
@@ -7425,7 +7469,7 @@ if (Test-Path $exportPath) {
             $backup = Join-Path (Get-Location) ([System.IO.Path]::GetFileNameWithoutExtension($exportPath) + " (before update " + (Get-Date -Format 'yyyyMMdd-HHmmss') + ").xlsx")
             Move-Item -LiteralPath $exportPath -Destination $backup -ErrorAction Stop
             $oldStateFile = Get-KissStatePath $exportPath
-            if (Test-Path -LiteralPath $oldStateFile) { Move-Item -LiteralPath $oldStateFile -Destination (Get-KissStatePath $backup) -ErrorAction SilentlyContinue }
+            if (Test-Path -LiteralPath $oldStateFile) { Move-Item -LiteralPath $oldStateFile -Destination (Get-KissStatePath $backup) -Force -ErrorAction SilentlyContinue }
             Write-Log "The previous workbook was kept as: $([System.IO.Path]::GetFileName($backup))" "Yellow"
         }
         else { Remove-Item $exportPath -Force -ErrorAction Stop }

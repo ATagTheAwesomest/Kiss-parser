@@ -25,6 +25,12 @@ Double-click **`Start-KISS.bat`** in the KISS folder.
 
 Everything KISS makes is saved in the folder you ran it in.
 
+### A TL or revision came in: update the job
+
+Main menu **U**. KISS asks for the previous BOM workbook, reads it, and ticks the `.kss` files it used (plus any new or changed ones). Add the new TL to the **Required Assm** workbook first (a revision is a `TLR####` column). The new TL may come with a `.kss` file or without one: with one, tick it; without one, nothing more is needed, its assemblies are found in the files that are already ticked.
+
+Then KISS shows what changed: new, moved, changed and dropped assemblies, the folders that need a new or reprinted label and work order, and any assemblies it could not find data for. Values you edited by hand (due dates, paint, explanations, exceptions, settings) are kept when the new data did not touch them; where both changed it asks, and `Enter` keeps yours. Press `Enter` at the end to build. The old workbook is kept; the new one has an `Update Log` tab, and the same list is saved as `Update Report - ... .txt`. Details: [PARSING.md](PARSING.md) section 6d.
+
 ### Starting a new job: the blank Required Assm workbook
 
 In the main menu choose **3**. KISS asks for the job number, saves `<job> REQUIRED ASSM.xlsx` in the folder you are working in (it never overwrites an existing file) and offers to open it. Fill it in:
@@ -42,7 +48,7 @@ Press **Enter** to take the answer shown as `(default)`. Some screens only appea
 | Screen | What it asks | Normal answer |
 | --- | --- | --- |
 | Checking this computer | Nothing. Shows green `[OK]` lines. A red `[X]` line says what to fix. | Just read it |
-| Main menu | Centered list: `1` build the job paperwork (default), `2` soundwall CSV, `3` new blank Required Assm workbook, `H` this guide, `Q` quit. Each entry has a short explanation under it | Enter (build the paperwork) |
+| Main menu | Centered list: `1` build the job paperwork (default), `U` update a job already built (a TL or revision came in), `2` soundwall CSV, `3` new blank Required Assm workbook, `H` this guide, `Q` quit. Each entry has a short explanation under it | Enter (build the paperwork) |
 | Select KSS files | Up/Down to move, Space to tick, `A` all, `N` none, Enter to confirm | Tick the TLs for this run |
 | TL for a file | Only if the file name has no TL. Type `TL012` or `12`, or Enter to leave blank | The TL number |
 | Required Assm workbook | KISS searches the working folder, `jobs`, the folders of your .kss files, Downloads, Desktop and Documents for `*REQUIRED ASSM*.xlsx` and lists what it finds, newest first. Pick a number, `B` to open a file picker window, or `0` to skip. You never type a path. **The workbook you pick is the filter for the whole run** (see the next row) | Enter (newest file) |

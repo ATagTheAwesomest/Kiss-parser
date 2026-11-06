@@ -151,6 +151,8 @@ function Show-MainMenu ([string]$Status) {
     $items = @(
         @{ Key = '1'; Title = 'Build the job paperwork'; Tag = 'MOST USED'; TagColor = 'Green';
            Lines = @('Reads the .kss files from Tekla and builds the BOM workbook,', 'folder labels, work orders, QPR sheets and the ProNest scripts.') },
+        @{ Key = 'U'; Title = 'Update a job already built'; Tag = 'NEW TL / REV'; TagColor = 'Magenta';
+           Lines = @('A TL or revision came in: shows what is new, changed or', 'removed and keeps your edits. Folders, work orders etc. follow.') },
         @{ Key = '2'; Title = 'Soundwall post schedule'; Tag = 'CSV'; TagColor = 'Cyan';
            Lines = @('Turns a post-schedule CSV into a KSS file and the same', 'workbook, so soundwall jobs follow the same path.') },
         @{ Key = '3'; Title = 'New blank Required Assm workbook'; Tag = 'TEMPLATE'; TagColor = 'Yellow';
@@ -188,13 +190,13 @@ function Show-MainMenu ([string]$Status) {
         Microsoft.PowerShell.Utility\Write-Host (' ' * ([Math]::Max(0, $left + 2)) + '> ') -ForegroundColor Green -NoNewline
         $answer = (Microsoft.PowerShell.Utility\Read-Host).Trim().ToUpper()
         if ($answer -eq '') { return '1' }
-        if ($answer -in @('1', '2', '3', 'Q')) { return $answer }
+        if ($answer -in @('1', '2', '3', 'U', 'Q')) { return $answer }
         if ($answer -eq 'H') {
             $guide = Join-Path (Split-Path -Parent $PSScriptRoot) 'docs\GETTING-STARTED.md'
             try { Start-Process -FilePath $guide } catch { $Status = "Could not open the guide: $guide" }
             continue
         }
-        $Status = "'$answer' is not on the list. Pick 1, 2, 3, H or Q."
+        $Status = "'$answer' is not on the list. Pick 1, 2, 3, U, H or Q."
     }
 }
 
@@ -556,7 +558,14 @@ function ConvertTo-TransmittalTag ($text) {
 # TL name in the "TL Name" row, the AFCO assembly numbers underneath, and optional "Paint / TL Details" and
 # "Due Date" rows above. A REV transmittal is named TLR####. Each transmittal + sequence (folder) becomes one 3.5" x 1.125" label.
 function Select-RequiredAssmFile {
-    param([string[]]$ExtraFolders = @())
+    param(
+        [string[]]$ExtraFolders = @(),
+        [string]$NamePattern = '(?i)required[\s_-]*assm',
+        [string]$ExcludePattern = '',
+        [string]$Heading = 'Required Assm workbook',
+        [string]$Noun = 'Required Assm workbooks',
+        [string]$SkipText = 'Skip (no workbook: all assemblies, or type your own list)'
+    )
 
     # Where to look: working folder, its jobs folder, the folders of the chosen .kss files, the KISS jobs folder, then common spots.
     $roots = @()
@@ -575,12 +584,12 @@ function Select-RequiredAssmFile {
     foreach ($r in $roots) {
         $depth = if ($env:USERPROFILE -and $r.StartsWith($env:USERPROFILE, [StringComparison]::OrdinalIgnoreCase) -and -not $r.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { 0 } else { 2 }
         $found += @(Get-ChildItem -LiteralPath $r -Filter *.xlsx -File -Recurse -Depth $depth -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -notlike '~$*' -and $_.Name -match '(?i)required[\s_-]*assm' })
+            Where-Object { $_.Name -notlike '~$*' -and $_.Name -match $NamePattern -and (-not $ExcludePattern -or $_.Name -notmatch $ExcludePattern) })
     }
     $files = @($found | Sort-Object FullName -Unique | Sort-Object LastWriteTime -Descending | Select-Object -First 9)
-    Write-Section "Required Assm workbook"
+    Write-Section $Heading
     if ($files.Count -gt 0) {
-        Write-Host "Found these Required Assm workbooks (newest first):"
+        Write-Host "Found these $Noun (newest first):"
         for ($i = 0; $i -lt $files.Count; $i++) {
             $f = $files[$i]
             $where = $f.DirectoryName
@@ -589,10 +598,10 @@ function Select-RequiredAssmFile {
         }
     }
     else {
-        Write-Host "No Required Assm workbook found nearby."
+        Write-Host "No $Noun found nearby."
     }
     Write-Host "  [B] Browse for a file..."
-    Write-Host "  [0] Skip (no workbook: all assemblies, or type your own list)"
+    Write-Host "  [0] $SkipText"
     $dflt = if ($files.Count -gt 0) { "1" } else { "0" }
 
     while ($true) {
@@ -605,7 +614,7 @@ function Select-RequiredAssmFile {
                 $dialog = New-Object System.Windows.Forms.OpenFileDialog
                 $dialog.Filter = "Excel workbooks (*.xlsx)|*.xlsx|All Files (*.*)|*.*"
                 $dialog.InitialDirectory = $root
-                $dialog.Title = "Select the Required Assm workbook"
+                $dialog.Title = "Select the $Heading"
                 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $dialog.FileName }
                 Write-Host "  Nothing picked." -ForegroundColor Yellow
             }
@@ -1119,6 +1128,25 @@ function Add-TlLabelSheet {
 }
 
 # --- SETTINGS TAB: values the setup prompts used to bake into cells now live here as named cells (Set_*) that the labels, work orders and Statistics follow ---
+# Name, label, value, number format ("@" = text), where it is used. Shared by the Settings tab and the update (which compares the old tab with these).
+function Get-SettingsList {
+    param([string]$Title, [string]$CustomerJob, [string]$OurJob, [string]$Initials, [string]$ProjectManagers)
+    $issued = [double][DateTime]::Today.ToOADate()
+    return @(
+        @("Set_Title", "Project title (label line 2)", $Title, "@", "Folder Labels, Statistics"),
+        @("Set_CustomerJob", "Customer job #", $CustomerJob, "@", "Folder Labels, TERRA Work Order, Statistics"),
+        @("Set_OurJob", "Our job #", $OurJob, "@", "Folder Labels (line 1), TERRA Work Order (ATF JOB / WO #)"),
+        @("Set_IssuedLabel", "Issued prefix", "IS:", "@", "Folder Labels (printed before the initials)"),
+        @("Set_Initials", "Initials (who made the folders)", $Initials, "@", "Folder Labels (line 2, right)"),
+        @("Set_ProjectManagers", "Project managers (PM box)", $ProjectManagers, "@", "TERRA Work Order"),
+        @("Set_IssuedDate", "Issued to shop date", $issued, "m/d/yy", "TERRA Work Order"),
+        @("Set_DefaultDue", "Due date text when a sequence has none", "3 WKS AFTER MATERIAL ARRIVES", "@", "TERRA Work Order"),
+        @("Set_DefaultNotes", "Default paint / notes (none listed for the sequence)", "-", "@", "TERRA Work Order (NOTES column)"),
+        @("Set_CWI", "CWI required", "N/A", "@", "TERRA Work Order"),
+        @("Set_WarnDays", "Flag a due date as DUE SOON within (days)", 7, "0", "Statistics (schedule)")
+    )
+}
+
 function Add-SettingsSheet {
     param($Workbook, [string]$Title, [string]$CustomerJob, [string]$OurJob, [string]$Initials, [string]$ProjectManagers)
 
@@ -1142,21 +1170,7 @@ function Add-SettingsSheet {
     $sheet.Range("A3:C3").Font.Bold = $true
     $sheet.Range("A3:C3").Interior.Color = Get-OleColor 216 228 188
 
-    $issued = [double][DateTime]::Today.ToOADate()
-    # Name, label, value, number format ("@" = text), where it is used
-    $settings = @(
-        @("Set_Title", "Project title (label line 2)", $Title, "@", "Folder Labels, Statistics"),
-        @("Set_CustomerJob", "Customer job #", $CustomerJob, "@", "Folder Labels, TERRA Work Order, Statistics"),
-        @("Set_OurJob", "Our job #", $OurJob, "@", "Folder Labels (line 1), TERRA Work Order (ATF JOB / WO #)"),
-        @("Set_IssuedLabel", "Issued prefix", "IS:", "@", "Folder Labels (printed before the initials)"),
-        @("Set_Initials", "Initials (who made the folders)", $Initials, "@", "Folder Labels (line 2, right)"),
-        @("Set_ProjectManagers", "Project managers (PM box)", $ProjectManagers, "@", "TERRA Work Order"),
-        @("Set_IssuedDate", "Issued to shop date", $issued, "m/d/yy", "TERRA Work Order"),
-        @("Set_DefaultDue", "Due date text when a sequence has none", "3 WKS AFTER MATERIAL ARRIVES", "@", "TERRA Work Order"),
-        @("Set_DefaultNotes", "Default paint / notes (none listed for the sequence)", "-", "@", "TERRA Work Order (NOTES column)"),
-        @("Set_CWI", "CWI required", "N/A", "@", "TERRA Work Order"),
-        @("Set_WarnDays", "Flag a due date as DUE SOON within (days)", 7, "0", "Statistics (schedule)")
-    )
+    $settings = Get-SettingsList -Title $Title -CustomerJob $CustomerJob -OurJob $OurJob -Initials $Initials -ProjectManagers $ProjectManagers
     $row = 4
     foreach ($s in $settings) {
         $sheet.Cells.Item($row, 1).Value2 = $s[1]
@@ -3062,7 +3076,7 @@ function Read-KssSelectionInteractive ($Entries) {
                 $box = if ($e.Checked) { "[x]" } else { "[ ]" }
                 $pointer = if ($i -eq $cursor) { ">" } else { " " }
                 $tlText = if ($e.TL) { $e.TL } else { "(no TL found)" }
-                $text = " $pointer $box $($e.Name)   ->  $tlText"
+                $text = " $pointer $box $($e.Name)   ->  $tlText$(if ($e.Note) { "   [$($e.Note)]" })"
                 if ($i -eq $cursor) { Write-Host $text -ForegroundColor Black -BackgroundColor Gray }
                 elseif ($e.Checked) { Write-Host $text -ForegroundColor Green }
                 else { Write-Host $text }
@@ -3101,10 +3115,14 @@ function Read-KssSelectionNumbered ($Entries) {
     Write-Host "========================================================"
     for ($i = 0; $i -lt $Entries.Count; $i++) {
         $tlText = if ($Entries[$i].TL) { $Entries[$i].TL } else { "(no TL found)" }
-        Write-Host (" [{0}] {1}   ->  {2}" -f ($i + 1), $Entries[$i].Name, $tlText)
+        Write-Host (" [{0}] {1}   ->  {2}{3}" -f ($i + 1), $Entries[$i].Name, $tlText, $(if ($Entries[$i].Note) { "   [$($Entries[$i].Note)]" } else { '' }))
     }
     Write-Host ""
-    $choice = Read-Host "Numbers separated by commas (e.g. 1,3), or A for all"
+    $ticked = @($Entries | Where-Object { $_.Checked })
+    $tickedNumbers = @(for ($i = 0; $i -lt $Entries.Count; $i++) { if ($Entries[$i].Checked) { $i + 1 } })
+    $dflt = if ($ticked.Count -gt 0) { " (Enter = $($tickedNumbers -join ','))" } else { "" }
+    $choice = Read-Host "Numbers separated by commas (e.g. 1,3), or A for all$dflt"
+    if (-not $choice -and $ticked.Count -gt 0) { return $ticked }
     if (-not $choice) { return @() }
     $trimmed = $choice.Trim()
     if ($trimmed -match '^(A|ALL)$') { return @($Entries) }
@@ -3120,6 +3138,7 @@ function Read-KssSelectionNumbered ($Entries) {
 }
 
 function Select-KssFiles {
+    param([hashtable]$Notes = @{}, [string[]]$PreTick = @())
     $files = @(Get-ChildItem -Filter "*.kss" -File |
         Where-Object {
             $_.Name -notmatch ' - Filtered Assemblies' -and
@@ -3130,7 +3149,7 @@ function Select-KssFiles {
     if ($files.Count -eq 0) { return @() }
 
     $entries = @(foreach ($f in $files) {
-        [PSCustomObject]@{ FullName = $f.FullName; Name = $f.Name; TL = (Get-TransmittalFromName $f.Name); Checked = $false }
+        [PSCustomObject]@{ FullName = $f.FullName; Name = $f.Name; TL = (Get-TransmittalFromName $f.Name); Checked = ($PreTick -contains $f.Name); Note = $(if ($Notes.ContainsKey($f.Name)) { $Notes[$f.Name] } else { '' }) }
     })
 
     $interactive = $false
@@ -4199,6 +4218,701 @@ function Write-FilteredAssemblyKssFile ($MasterData, $AssemblyDrawings, $Project
 }
 
 
+# =========================================================================
+# UPDATE A JOB THAT WAS ALREADY BUILT
+# Reads the previous BOM workbook (and the small "last build" record saved next to it), compares it with what this run
+# produces from the .kss files and the Required Assm workbook, shows what is new / changed / removed, and keeps or
+# replaces the values that were edited by hand in the old workbook. Everything downstream (folder labels, work orders,
+# QPR, Exceptions, Statistics, shop scripts) is then rebuilt by the normal run from the merged values.
+# =========================================================================
+
+# Text used to compare two cell values: trimmed, one space between words, no case, numbers written the same way.
+function ConvertTo-CmpText ($v) {
+    $inv = [System.Globalization.CultureInfo]::InvariantCulture
+    if ($null -eq $v) { return "" }
+    if ($v -is [double] -or $v -is [decimal] -or $v -is [int] -or $v -is [long]) { return ([double]$v).ToString("0.######", $inv) }
+    $t = (("$v").Trim()) -replace '\s+', ' '
+    $d = 0.0
+    if ($t -and [double]::TryParse($t, [System.Globalization.NumberStyles]::Float, $inv, [ref]$d)) { return $d.ToString("0.######", $inv) }
+    return $t.ToLowerInvariant()
+}
+
+# A cell's value as plain text (numbers written the same way on every PC; a date number is NOT converted).
+function Get-CellText ($v) {
+    if ($null -eq $v) { return "" }
+    if ($v -is [double]) { return $v.ToString("0.######", [System.Globalization.CultureInfo]::InvariantCulture) }
+    return ("$v").Trim()
+}
+
+# Which of the three states an editable value is in, given the value in the OLD workbook ($Old), the value the inputs
+# (Required Assm) give now ($New) and, when the "last build" record exists, the value the inputs gave then ($Seed).
+#   Same      nothing to decide
+#   TakeNew   the inputs changed and nobody edited the old workbook here -> use the new value
+#   KeepOld   somebody edited the old workbook and the inputs did not change -> keep the edit
+#   Conflict  both changed, or there is no record to tell which one changed -> ask
+function Get-EditState {
+    param($Old, $New, $Seed, [bool]$HasSeed)
+    $o = ConvertTo-CmpText $Old; $n = ConvertTo-CmpText $New
+    if ($o -eq $n) { return 'Same' }
+    if ($HasSeed) {
+        $s = ConvertTo-CmpText $Seed
+        if ($o -eq $s) { return 'TakeNew' }
+        if ($n -eq $s) { return 'KeepOld' }
+        return 'Conflict'
+    }
+    if ($o -eq '') { return 'TakeNew' }      # the old workbook had nothing there, so there is no edit to lose
+    return 'Conflict'
+}
+
+function Get-KissStatePath ([string]$WorkbookPath) { return [System.IO.Path]::ChangeExtension($WorkbookPath, '.kiss.json') }
+
+# The "last build" record saved next to every workbook: which .kss files were used and what the inputs said then.
+function Read-KissState ([string]$WorkbookPath) {
+    $p = Get-KissStatePath $WorkbookPath
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    try { $j = [System.IO.File]::ReadAllText($p) | ConvertFrom-Json } catch { return $null }
+    if (-not $j -or -not $j.Version) { return $null }
+    $seq = @{}; $exc = @{}; $set = @{}; $sched = @{}; $files = @{}
+    foreach ($s in @($j.Seq)) { if ($s) { $seq[[string]$s.K] = @{ Due = [string]$s.Due; Paint = [string]$s.Paint; Expl = [string]$s.Expl } } }
+    foreach ($s in @($j.Exc)) { if ($s) { $exc[[string]$s.K] = @{ Due = [string]$s.Due; Paint = [string]$s.Paint; Expl = [string]$s.Expl } } }
+    foreach ($s in @($j.Settings)) { if ($s) { $set[[string]$s.K] = [string]$s.V } }
+    foreach ($s in @($j.Sched)) { if ($s) { $sched[[string]$s.K] = [string]$s.V } }
+    foreach ($s in @($j.Files)) { if ($s) { $files[[string]$s.N] = [string]$s.H } }
+    return [PSCustomObject]@{
+        Built = [string]$j.Built; Merge = $j.MergeDuplicates; Qpr = [bool]$j.Qpr; QprBy = [string]$j.QprBy
+        Seq = $seq; Exc = $exc; Settings = $set; Sched = $sched; Files = $files
+    }
+}
+
+# Writes the record next to the workbook. $Fresh = what the inputs said this run (before any value from an old workbook was kept).
+function Save-KissState {
+    param([string]$WorkbookPath, $Fresh, $KssFiles, [bool]$Merge, [bool]$Qpr, [string]$QprBy)
+    $files = @(foreach ($f in @($KssFiles)) {
+        $h = ""
+        try { $h = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash } catch { }
+        @{ N = "$($f.Name)"; H = $h }
+    })
+    $state = [ordered]@{
+        Version = 1
+        Built = (Get-Date).ToString('s')
+        Workbook = [System.IO.Path]::GetFileName($WorkbookPath)
+        MergeDuplicates = $Merge
+        Qpr = $Qpr
+        QprBy = $QprBy
+        Files = $files
+        Settings = @(foreach ($k in $Fresh.Settings.Keys) { @{ K = $k; V = "$($Fresh.Settings[$k])" } })
+        Seq = @(foreach ($k in $Fresh.Seq.Keys) { @{ K = $k; Due = $Fresh.Seq[$k].Due; Paint = $Fresh.Seq[$k].Paint; Expl = $Fresh.Seq[$k].Expl } })
+        Exc = @(foreach ($k in $Fresh.Exc.Keys) { @{ K = $k; Due = $Fresh.Exc[$k].Due; Paint = $Fresh.Exc[$k].Paint; Expl = $Fresh.Exc[$k].Expl } })
+        Sched = @(foreach ($k in $Fresh.Sched.Keys) { @{ K = $k; V = "$($Fresh.Sched[$k])" } })
+    }
+    $json = $state | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText((Get-KissStatePath $WorkbookPath), $json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# What the inputs say right now for every value that can be edited by hand in the workbook.
+function Get-FreshSeeds {
+    param($SettingsList, $SequenceRows, $ExceptionRows)
+    $seq = [ordered]@{}; $exc = [ordered]@{}; $set = [ordered]@{}; $sched = [ordered]@{}
+    foreach ($s in @($SettingsList)) { $set[$s[0]] = Get-CellText $s[2] }
+    foreach ($r in @($SequenceRows)) {
+        $seq["$($r.TL)|$($r.Sequence)"] = @{ Due = "$($r.DueDate)"; Paint = "$($r.Paint)"; Expl = "$($r.Explanation)" }
+        $sched["$($r.TL) / $($r.Sequence)"] = "$($r.DueDate)"
+    }
+    foreach ($e in @($ExceptionRows)) { $exc["$($e.Assembly)"] = @{ Due = "$($e.DueDate)"; Paint = "$($e.Paint)"; Expl = "$($e.Explanation)" } }
+    return @{ Settings = $set; Seq = $seq; Exc = $exc; Sched = $sched }
+}
+
+function Get-SheetValues ($Sheet) {
+    try { $last = $Sheet.Cells.SpecialCells(11) } catch { return $null }
+    $v = $Sheet.Range($Sheet.Cells.Item(1, 1), $last).Value2
+    if ($v -is [System.Array] -and $v.Rank -eq 2) { return $v }
+    return $null
+}
+
+function Get-HeaderColumns ($Vals) {
+    $map = @{}
+    $r0 = $Vals.GetLowerBound(0)
+    for ($c = $Vals.GetLowerBound(1); $c -le $Vals.GetUpperBound(1); $c++) {
+        $h = ("$($Vals[$r0, $c])").Trim().ToLowerInvariant()
+        if ($h -and -not $map.ContainsKey($h)) { $map[$h] = $c }
+    }
+    return $map
+}
+
+# Opens the previous BOM workbook read-only in an Excel of its own and returns what the update needs from it:
+# the part rows of the Master BOM, the values typed on Settings / Sequence Notes / Assembly Exceptions / the Statistics schedule.
+function Read-PreviousBom {
+    param([string]$Path, $SettingNames)
+
+    $res = [PSCustomObject]@{
+        Path = $Path; Built = (Get-Item -LiteralPath $Path).LastWriteTime
+        Settings = @{}; SeqNotes = @{}; Exceptions = @{}; Schedule = @{}
+        Bom = [System.Collections.Generic.List[object]]::new(); SourceFiles = @(); Sheets = @()
+    }
+    $xl = $null; $wb = $null
+    try {
+        $xl = New-Object -ComObject Excel.Application
+        $xl.Visible = $false
+        $xl.DisplayAlerts = $false
+        $wb = $xl.Workbooks.Open($Path, 0, $true)
+        $res.Sheets = @(foreach ($ws in $wb.Worksheets) { $ws.Name })
+
+        foreach ($n in @($SettingNames)) {
+            try { $res.Settings[$n] = $wb.Names.Item($n).RefersToRange.Value2 } catch { }
+        }
+
+        if ($res.Sheets -contains 'Master BOM') {
+            $v = Get-SheetValues $wb.Worksheets.Item('Master BOM')
+            if ($v) {
+                $h = Get-HeaderColumns $v
+                $cA = $h['assembly']; $cP = $h['partmark']
+                if ($cA -and $cP) {
+                    $get = { param($r, $name) if ($h.ContainsKey($name)) { Get-CellText ($v[$r, $h[$name]]) } else { "" } }
+                    $src = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                    for ($r = $v.GetLowerBound(0) + 1; $r -le $v.GetUpperBound(0); $r++) {
+                        $asm = Get-CellText ($v[$r, $cA])
+                        if (-not $asm) { continue }          # blank row or the totals row
+                        $q = 0.0
+                        [void][double]::TryParse((& $get $r 'qty'), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$q)
+                        $tl = & $get $r 'transmittal'; if (-not $tl) { $tl = & $get $r 'tl #' }
+                        $res.Bom.Add([PSCustomObject]@{
+                            Asm = $asm; Part = (Get-CellText ($v[$r, $cP])); Qty = $q
+                            Shape = (& $get $r 'shape'); Size = (& $get $r 'size'); Len = (& $get $r 'length'); Grade = (& $get $r 'grade')
+                            Tl = $tl; Seq = (& $get $r 'sequence'); Status = (& $get $r 'status')
+                        })
+                        $s = & $get $r 'sourcefile'
+                        if ($s) { [void]$src.Add($s) }
+                    }
+                    $res.SourceFiles = @($src)
+                }
+            }
+        }
+
+        if ($res.Sheets -contains 'Sequence Notes') {
+            $v = Get-SheetValues $wb.Worksheets.Item('Sequence Notes')
+            if ($v) {
+                $h = Get-HeaderColumns $v
+                if ($h['transmittal'] -and $h['sequence']) {
+                    for ($r = $v.GetLowerBound(0) + 1; $r -le $v.GetUpperBound(0); $r++) {
+                        $tl = Get-CellText ($v[$r, $h['transmittal']]); $sq = Get-CellText ($v[$r, $h['sequence']])
+                        if (-not $tl -or -not $sq) { continue }
+                        $res.SeqNotes["$tl|$sq"] = @{
+                            Due = $(if ($h['due date']) { ConvertTo-DueText ($v[$r, $h['due date']]) } else { "" })
+                            Paint = $(if ($h['paint / notes']) { Get-CellText ($v[$r, $h['paint / notes']]) } else { "" })
+                            Expl = $(if ($h['explanation']) { Get-CellText ($v[$r, $h['explanation']]) } else { "" })
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($res.Sheets -contains 'Assembly Exceptions') {
+            $v = Get-SheetValues $wb.Worksheets.Item('Assembly Exceptions')
+            if ($v) {
+                $h = Get-HeaderColumns $v
+                if ($h['assembly']) {
+                    for ($r = $v.GetLowerBound(0) + 1; $r -le $v.GetUpperBound(0); $r++) {
+                        $asm = (Get-CellText ($v[$r, $h['assembly']])) -replace '\D', ''
+                        if ($asm.Length -lt 4) { continue }
+                        $res.Exceptions[$asm] = @{
+                            Due = $(if ($h['override due date']) { ConvertTo-DueText ($v[$r, $h['override due date']]) } else { "" })
+                            Paint = $(if ($h['override paint / notes']) { Get-CellText ($v[$r, $h['override paint / notes']]) } else { "" })
+                            Expl = $(if ($h['override explanation']) { Get-CellText ($v[$r, $h['override explanation']]) } else { "" })
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($res.Sheets -contains 'Statistics') {
+            $v = Get-SheetValues $wb.Worksheets.Item('Statistics')
+            if ($v -and $v.GetUpperBound(1) -ge 16) {
+                for ($r = $v.GetLowerBound(0); $r -le $v.GetUpperBound(0); $r++) {
+                    $label = (Get-CellText ($v[$r, 15]))
+                    if ($label -match '^(TLR?\d+)\s*/\s*(\d{4})$') { $res.Schedule["$($Matches[1]) / $($Matches[2])"] = ConvertTo-DueText ($v[$r, 16]) }
+                }
+            }
+        }
+    }
+    finally {
+        if ($wb) { try { $wb.Close($false) } catch { } }
+        if ($xl) {
+            try { $xl.Quit() } catch { }
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($xl)
+        }
+    }
+    return $res
+}
+
+# One row per part of the new Master BOM, in the same shape Read-PreviousBom gives for the old one.
+function Get-NewBomRows {
+    param($MasterData, $AsmByKey, $TlNames)
+    foreach ($item in @($MasterData)) {
+        $a = $AsmByKey["$($item.TL)|$($item.Assembly)"]
+        $tl = if ($a -and $TlNames.ContainsKey($a.TlNumber)) { $TlNames[$a.TlNumber] } elseif ($a) { "TL$($a.TlNumber)" } else { "$($item.TL)" }
+        $seq = if ($a) { $a.Sequence } else { "$($item.Assembly)".Substring(0, [Math]::Min(4, "$($item.Assembly)".Length)) }
+        [PSCustomObject]@{
+            Asm = "$($item.Assembly)".Trim(); Part = "$($item.PartMark)"; Qty = [double]$item.Qty
+            Shape = "$($item.Shape)"; Size = "$($item.Size)"; Len = "$($item.Length)"; Grade = "$($item.Grade)"
+            Tl = $tl; Seq = "$seq"; Status = ""
+        }
+    }
+}
+
+# Compares the old Master BOM rows with the new ones, assembly by assembly.
+# $StillRequired = assemblies the Required Assm workbook still lists (an old assembly missing from the new data but still listed
+# there means its .kss was not selected, not that it was dropped).
+function Get-BomChanges {
+    param($OldRows, $NewRows, $StillRequired)
+
+    $group = {
+        param($rows)
+        $d = [ordered]@{}
+        foreach ($r in $rows) {
+            $k = "$($r.Asm)".Trim()
+            if (-not $d.Contains($k)) { $d[$k] = @{ Tl = "$($r.Tl)"; Seq = "$($r.Seq)"; Parts = [ordered]@{} } }
+            $pk = ConvertTo-CmpText $r.Part
+            $p = $d[$k].Parts
+            if (-not $p.Contains($pk)) { $p[$pk] = @{ Name = "$($r.Part)"; Qty = 0.0; Spec = (@($r.Shape, $r.Size, $r.Len, $r.Grade | ForEach-Object { ConvertTo-CmpText $_ }) -join '|'); Show = "$($r.Shape) $($r.Size) x $($r.Len) $($r.Grade)".Trim() } }
+            $p[$pk].Qty += [double]$r.Qty
+        }
+        return $d
+    }
+    $old = & $group @($OldRows)
+    $new = & $group @($NewRows)
+
+    $added = [System.Collections.Generic.List[object]]::new()
+    $removed = [System.Collections.Generic.List[object]]::new()
+    $moved = [System.Collections.Generic.List[object]]::new()
+    $changed = [System.Collections.Generic.List[object]]::new()
+    $changedParts = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $unchanged = 0
+    $fmt = { param($q) ([double]$q).ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture) }
+
+    foreach ($k in $new.Keys) {
+        $n = $new[$k]
+        if (-not $old.Contains($k)) { $added.Add([PSCustomObject]@{ Asm = $k; Tl = $n.Tl; Seq = $n.Seq; Parts = $n.Parts.Count }); continue }
+        $o = $old[$k]
+        $isMoved = (ConvertTo-CmpText $o.Tl) -ne (ConvertTo-CmpText $n.Tl)
+        if ($isMoved) { $moved.Add([PSCustomObject]@{ Asm = $k; FromTl = $o.Tl; FromSeq = $o.Seq; Tl = $n.Tl; Seq = $n.Seq }) }
+        $details = [System.Collections.Generic.List[string]]::new()
+        foreach ($pk in $n.Parts.Keys) {
+            $np = $n.Parts[$pk]
+            if (-not $o.Parts.Contains($pk)) { $details.Add("part $($np.Name) added (qty $(& $fmt $np.Qty), $($np.Show))"); continue }
+            $op = $o.Parts[$pk]
+            $bits = @()
+            if ([Math]::Abs($op.Qty - $np.Qty) -gt 0.0001) { $bits += "qty $(& $fmt $op.Qty) -> $(& $fmt $np.Qty)" }
+            if ($op.Spec -ne $np.Spec) { $bits += "$($op.Show) -> $($np.Show)" }
+            if ($bits.Count -gt 0) { $details.Add("part $($np.Name): $($bits -join '; ')"); [void]$changedParts.Add("$k|$($np.Name)") }
+        }
+        foreach ($pk in $o.Parts.Keys) { if (-not $n.Parts.Contains($pk)) { $details.Add("part $($o.Parts[$pk].Name) removed (was qty $(& $fmt $o.Parts[$pk].Qty))") } }
+        if ($details.Count -gt 0) { $changed.Add([PSCustomObject]@{ Asm = $k; Tl = $n.Tl; Seq = $n.Seq; Details = @($details) }) }
+        elseif (-not $isMoved) { $unchanged++ }
+    }
+    foreach ($k in $old.Keys) {
+        if ($new.Contains($k)) { continue }
+        $o = $old[$k]
+        $why = if ($StillRequired -and $StillRequired.Contains($k)) { 'NoData' } else { 'Dropped' }
+        $removed.Add([PSCustomObject]@{ Asm = $k; Tl = $o.Tl; Seq = $o.Seq; Why = $why })
+    }
+
+    # Folders (one per TL + sequence) that need new or reprinted paperwork
+    $oldFolders = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $newFolders = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($k in $old.Keys) { [void]$oldFolders.Add("$($old[$k].Tl) / $($old[$k].Seq)") }
+    foreach ($k in $new.Keys) { [void]$newFolders.Add("$($new[$k].Tl) / $($new[$k].Seq)") }
+    $folders = [ordered]@{}
+    $mark = {
+        param($f, $isNew)
+        if (-not $folders.Contains($f)) { $folders[$f] = if ($isNew) { 'NEW' } else { 'CHANGED' } }
+    }
+    foreach ($a in $added) { $f = "$($a.Tl) / $($a.Seq)"; & $mark $f (-not $oldFolders.Contains($f)) }
+    foreach ($a in $changed) { $f = "$($a.Tl) / $($a.Seq)"; & $mark $f (-not $oldFolders.Contains($f)) }
+    foreach ($a in $moved) {
+        $f = "$($a.Tl) / $($a.Seq)"; & $mark $f (-not $oldFolders.Contains($f))
+        $from = "$($a.FromTl) / $($a.FromSeq)"
+        if ($newFolders.Contains($from)) { & $mark $from $false } elseif (-not $folders.Contains($from)) { $folders[$from] = 'GONE' }
+    }
+    foreach ($a in $removed) {
+        $from = "$($a.Tl) / $($a.Seq)"
+        if ($newFolders.Contains($from)) { & $mark $from $false } elseif (-not $folders.Contains($from)) { $folders[$from] = 'GONE' }
+    }
+    $oldTls = @($old.Keys | ForEach-Object { $old[$_].Tl } | Select-Object -Unique)
+    $newTls = @($new.Keys | ForEach-Object { $new[$_].Tl } | Select-Object -Unique)
+
+    return [PSCustomObject]@{
+        Added = @($added); Removed = @($removed); Moved = @($moved); Changed = @($changed); Unchanged = $unchanged
+        ChangedParts = $changedParts; Folders = $folders
+        NewTls = @($newTls | Where-Object { $oldTls -notcontains $_ }); GoneTls = @($oldTls | Where-Object { $newTls -notcontains $_ })
+        OldAssemblies = $old.Count; NewAssemblies = $new.Count
+    }
+}
+
+# Every editable value, old vs new, with its state (see Get-EditState). Settings, Sequence Notes, Assembly Exceptions, Statistics schedule.
+function Get-EditItems {
+    param($Prev, $PrevState, $SettingsList, $SequenceRows, $ExceptionRows, $AsmDigits)
+
+    $items = [System.Collections.Generic.List[object]]::new()
+    $hasState = [bool]$PrevState
+    $add = {
+        param($Group, $Key, $Field, $Label, $Old, $New, $Seed, $HasSeed, $Force)
+        $state = Get-EditState -Old $Old -New $New -Seed $Seed -HasSeed $HasSeed
+        if ($Force -and $state -ne 'Same') { $state = 'Conflict' }
+        $items.Add([PSCustomObject]@{ Group = $Group; Key = $Key; Field = $Field; Label = $Label; Old = $Old; New = $New; State = $state; Use = $(if ($state -eq 'TakeNew') { 'New' } else { 'Old' }) })
+    }
+
+    foreach ($s in @($SettingsList)) {
+        $n = $s[0]
+        if (-not $Prev.Settings.ContainsKey($n)) { continue }
+        $seed = if ($hasState -and $PrevState.Settings.ContainsKey($n)) { $PrevState.Settings[$n] } else { $null }
+        $hasSeed = $hasState -and $PrevState.Settings.ContainsKey($n)
+        # The issue date always moves with the day the update is made, so it is always the user's call
+        & $add 'Settings' $n $n $s[1] $Prev.Settings[$n] $s[2] $seed $hasSeed ($n -eq 'Set_IssuedDate')
+    }
+    foreach ($r in @($SequenceRows)) {
+        $key = "$($r.TL)|$($r.Sequence)"
+        if (-not $Prev.SeqNotes.ContainsKey($key)) { continue }      # a new folder: nothing to keep
+        $o = $Prev.SeqNotes[$key]
+        $sd = if ($hasState -and $PrevState.Seq.ContainsKey($key)) { $PrevState.Seq[$key] } else { $null }
+        $hs = [bool]$sd
+        $where = "$($r.TL) / $($r.Sequence)"
+        & $add 'Sequence Notes' $key 'Due' "$where  Due date" $o.Due $r.DueDate $(if ($hs) { $sd.Due } else { $null }) $hs $false
+        & $add 'Sequence Notes' $key 'Paint' "$where  Paint / Notes" $o.Paint $r.Paint $(if ($hs) { $sd.Paint } else { $null }) $hs $false
+        & $add 'Sequence Notes' $key 'Expl' "$where  Explanation" $o.Expl $r.Explanation $(if ($hs) { $sd.Expl } else { $null }) $hs $false
+        $sk = "$($r.TL) / $($r.Sequence)"
+        # The Statistics schedule due date is asked about on its own only when it was edited apart from the Sequence Notes one
+        if ($Prev.Schedule.ContainsKey($sk) -and (ConvertTo-CmpText $Prev.Schedule[$sk]) -ne (ConvertTo-CmpText $o.Due)) {
+            $ss = if ($hasState -and $PrevState.Sched.ContainsKey($sk)) { $PrevState.Sched[$sk] } else { $null }
+            & $add 'Statistics schedule' $sk 'Due' "$where  Due date (Statistics schedule)" $Prev.Schedule[$sk] $r.DueDate $ss ($hasState -and $PrevState.Sched.ContainsKey($sk)) $false
+        }
+    }
+    # Exceptions: the new ones plus any ASSM the old workbook gave an override that the Exceptions tab no longer lists (still in this run)
+    $freshByAsm = @{}
+    foreach ($e in @($ExceptionRows)) { $freshByAsm["$($e.Assembly)"] = $e }
+    $keys = [System.Collections.Generic.List[string]]::new()
+    foreach ($k in $freshByAsm.Keys) { $keys.Add($k) }
+    foreach ($k in $Prev.Exceptions.Keys) { if (-not $freshByAsm.ContainsKey($k) -and $AsmDigits.Contains($k)) { $keys.Add($k) } }
+    foreach ($k in ($keys | Sort-Object)) {
+        $o = if ($Prev.Exceptions.ContainsKey($k)) { $Prev.Exceptions[$k] } else { @{ Due = ""; Paint = ""; Expl = "" } }
+        $e = $freshByAsm[$k]
+        $nv = if ($e) { @{ Due = "$($e.DueDate)"; Paint = "$($e.Paint)"; Expl = "$($e.Explanation)" } } else { @{ Due = ""; Paint = ""; Expl = "" } }
+        $sd = if ($hasState -and $PrevState.Exc.ContainsKey($k)) { $PrevState.Exc[$k] } elseif ($hasState) { @{ Due = ""; Paint = ""; Expl = "" } } else { $null }
+        $hs = [bool]$sd
+        & $add 'Assembly Exceptions' $k 'Due' "ASSM $k  Override due date" $o.Due $nv.Due $(if ($hs) { $sd.Due } else { $null }) $hs $false
+        & $add 'Assembly Exceptions' $k 'Paint' "ASSM $k  Override paint / notes" $o.Paint $nv.Paint $(if ($hs) { $sd.Paint } else { $null }) $hs $false
+        & $add 'Assembly Exceptions' $k 'Expl' "ASSM $k  Override explanation" $o.Expl $nv.Expl $(if ($hs) { $sd.Expl } else { $null }) $hs $false
+    }
+    return $items
+}
+
+# A value as shown to the user (the issue date is stored as a date number)
+function Format-EditValue ($Item, $Value) {
+    if ($Item.Key -eq 'Set_IssuedDate' -and "$Value" -match '^\d+(\.\d+)?$') { return [DateTime]::FromOADate([double]$Value).ToString('M/d/yy') }
+    return (Get-CellText $Value)
+}
+
+function Show-UpdateLines ($Lines, [int]$Max = 12, [string]$Color = 'Gray') {
+    $n = 0
+    foreach ($l in $Lines) {
+        if ($n -ge $Max) { Write-Host "      ... and $(@($Lines).Count - $Max) more (all of them are in the report)" -ForegroundColor DarkGray; break }
+        Write-Host "      $l" -ForegroundColor $Color
+        $n++
+    }
+}
+
+# Shows what changed, asks about every value that changed on both sides, applies the answers to the rows the run is about to
+# write, and saves a plain-text report. Returns Proceed, the Master BOM status text to carry over, the Settings values and
+# schedule due dates to keep, the (possibly extended) exception rows, and the rows for the "Update Log" tab.
+function Invoke-UpdateReview {
+    param($Prev, $PrevState, $NewRows, $StillRequired, $SettingsList, $SequenceRows, $ExceptionRows, $AsmRows, $TlNames,
+          $KssFiles, $KssNotes, $MissingAssemblies, [string]$ReportFolder, [string]$JobLabel)
+
+    $log = [System.Collections.Generic.List[object]]::new()        # Change, Folder, Assembly, Detail
+    $rep = [System.Collections.Generic.List[string]]::new()
+    $say = { param($t) $rep.Add($t) }
+    $when = Get-Date
+
+    $ch = Get-BomChanges -OldRows $Prev.Bom -NewRows $NewRows -StillRequired $StillRequired
+
+    Write-Section "What changed since the previous workbook"
+    Write-Host "  Previous: $([System.IO.Path]::GetFileName($Prev.Path))  (saved $($Prev.Built.ToString('M/d/yy h:mm tt')))" -ForegroundColor DarkGray
+    if (-not $PrevState) { Write-Host "  No 'last build' record next to it (first update of this job): values that differ are shown for you to choose." -ForegroundColor DarkGray }
+    & $say "UPDATE REPORT  $JobLabel"
+    & $say "Made $($when.ToString('M/d/yyyy h:mm tt'))   Previous workbook: $([System.IO.Path]::GetFileName($Prev.Path))"
+    & $say ""
+
+    # --- source files ---
+    Write-Host "  KISS files" -ForegroundColor Yellow
+    & $say "KISS FILES"
+    foreach ($f in @($KssFiles)) {
+        $note = if ($KssNotes.ContainsKey($f.Name)) { $KssNotes[$f.Name] } else { '' }
+        $line = "{0,-12} {1}" -f $(if ($note) { "[$note]" } else { '' }), $f.Name
+        Write-Host "    $line" -ForegroundColor $(if ($note -match 'NEW|CHANGED') { 'Yellow' } else { 'Gray' })
+        & $say "  $line"
+    }
+    $unusedBefore = @($Prev.SourceFiles | Where-Object { $n = $_; -not (@($KssFiles | Where-Object { $_.Name -ieq $n })) })
+    foreach ($u in $unusedBefore) {
+        Write-Host "    [NOT SELECTED] $u  (used by the previous workbook)" -ForegroundColor Yellow
+        & $say "  [NOT SELECTED] $u (used by the previous workbook)"
+    }
+    & $say ""
+
+    # --- assemblies ---
+    Write-Host ""
+    Write-Host "  Assemblies: $($ch.OldAssemblies) before, $($ch.NewAssemblies) now" -ForegroundColor Yellow
+    & $say "ASSEMBLIES: $($ch.OldAssemblies) before, $($ch.NewAssemblies) now, $($ch.Unchanged) unchanged"
+    if ($ch.NewTls.Count -gt 0) { Write-Host "    New transmittal(s): $($ch.NewTls -join ', ')" -ForegroundColor Green; & $say "  New transmittal(s): $($ch.NewTls -join ', ')" }
+    if ($ch.GoneTls.Count -gt 0) { Write-Host "    Transmittal(s) no longer in the BOM: $($ch.GoneTls -join ', ')" -ForegroundColor Red; & $say "  Transmittal(s) no longer in the BOM: $($ch.GoneTls -join ', ')" }
+
+    $groupLine = {
+        param($title, $color, $count, $lines)
+        Write-Host ("    {0,-34}{1}" -f $title, $count) -ForegroundColor $color
+        Show-UpdateLines $lines 10 $color
+    }
+    $addLines = @($ch.Added | ForEach-Object { "$($_.Asm)   $($_.Tl) / $($_.Seq)   $($_.Parts) part(s)" })
+    $movLines = @($ch.Moved | ForEach-Object { "$($_.Asm)   $($_.FromTl) / $($_.FromSeq)  ->  $($_.Tl) / $($_.Seq)" })
+    $chgLines = @($ch.Changed | ForEach-Object { "$($_.Asm)   $($_.Tl) / $($_.Seq)   $($_.Details.Count) difference(s): $($_.Details[0])" })
+    $remDrop = @($ch.Removed | Where-Object { $_.Why -eq 'Dropped' })
+    $remNoData = @($ch.Removed | Where-Object { $_.Why -eq 'NoData' })
+    $remDropLines = @($remDrop | ForEach-Object { "$($_.Asm)   was $($_.Tl) / $($_.Seq)" })
+    $remNoDataLines = @($remNoData | ForEach-Object { "$($_.Asm)   was $($_.Tl) / $($_.Seq)" })
+    if ($ch.Added.Count) { & $groupLine "New assemblies" 'Green' $ch.Added.Count $addLines }
+    if ($ch.Moved.Count) { & $groupLine "Moved to another TL (REV)" 'Cyan' $ch.Moved.Count $movLines }
+    if ($ch.Changed.Count) { & $groupLine "Changed (qty / size / parts)" 'Yellow' $ch.Changed.Count $chgLines }
+    if ($remDrop.Count) { & $groupLine "Dropped from the Required Assm" 'Red' $remDrop.Count $remDropLines }
+    if ($remNoData.Count) { & $groupLine "STILL REQUIRED, NO .KSS DATA" 'Red' $remNoData.Count $remNoDataLines }
+    if (-not ($ch.Added.Count + $ch.Moved.Count + $ch.Changed.Count + $remDrop.Count + $remNoData.Count)) { Write-Host "    No part differences found." -ForegroundColor Green }
+
+    foreach ($a in $ch.Added) { $log.Add([PSCustomObject]@{ Change = 'NEW assembly'; Folder = "$($a.Tl) / $($a.Seq)"; Assembly = $a.Asm; Detail = "$($a.Parts) part(s)" }) }
+    foreach ($a in $ch.Moved) { $log.Add([PSCustomObject]@{ Change = 'MOVED (REV)'; Folder = "$($a.Tl) / $($a.Seq)"; Assembly = $a.Asm; Detail = "was $($a.FromTl) / $($a.FromSeq)" }) }
+    foreach ($a in $ch.Changed) { foreach ($d in $a.Details) { $log.Add([PSCustomObject]@{ Change = 'CHANGED'; Folder = "$($a.Tl) / $($a.Seq)"; Assembly = $a.Asm; Detail = $d }) } }
+    foreach ($a in $remDrop) { $log.Add([PSCustomObject]@{ Change = 'DROPPED'; Folder = "$($a.Tl) / $($a.Seq)"; Assembly = $a.Asm; Detail = 'no longer listed in the Required Assm' }) }
+    foreach ($a in $remNoData) { $log.Add([PSCustomObject]@{ Change = 'NO KSS DATA'; Folder = "$($a.Tl) / $($a.Seq)"; Assembly = $a.Asm; Detail = 'still listed in the Required Assm but not found in the selected .kss files' }) }
+
+    if ($ch.Added.Count) { & $say "NEW ASSEMBLIES ($($ch.Added.Count))"; foreach ($l in $addLines) { & $say "  $l" }; & $say "" }
+    if ($ch.Moved.Count) { & $say "MOVED TO ANOTHER TL ($($ch.Moved.Count))"; foreach ($l in $movLines) { & $say "  $l" }; & $say "" }
+    if ($ch.Changed.Count) { & $say "CHANGED ($($ch.Changed.Count))"; foreach ($a in $ch.Changed) { & $say "  $($a.Asm)   $($a.Tl) / $($a.Seq)"; foreach ($d in $a.Details) { & $say "      $d" } }; & $say "" }
+    if ($remDrop.Count) { & $say "DROPPED FROM THE REQUIRED ASSM ($($remDrop.Count))"; foreach ($l in $remDropLines) { & $say "  $l" }; & $say "" }
+    if ($remNoData.Count) { & $say "STILL REQUIRED BUT NO .KSS DATA ($($remNoData.Count)): add the .kss file that holds them"; foreach ($l in $remNoDataLines) { & $say "  $l" }; & $say "" }
+
+    $missing = @($MissingAssemblies | Where-Object { $_ })
+    $newMissing = @($missing | Where-Object { $m = $_; -not (@($Prev.Bom | Where-Object { $_.Asm -eq $m })) })
+    if ($newMissing.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  Listed in the Required Assm but found in none of the selected .kss files: $($newMissing.Count)" -ForegroundColor Red
+        Show-UpdateLines $newMissing 12 'Red'
+        Write-Host "    They are not in the workbook. A new TL's .kss file is needed for them (select it, or run the update again once it arrives)." -ForegroundColor Yellow
+        & $say "LISTED IN THE REQUIRED ASSM BUT IN NONE OF THE SELECTED .KSS FILES ($($newMissing.Count)): $($newMissing -join ', ')"
+        & $say ""
+        foreach ($m in $newMissing) { $log.Add([PSCustomObject]@{ Change = 'NO KSS DATA'; Folder = ''; Assembly = $m; Detail = 'new in the Required Assm; no .kss file selected holds it' }) }
+    }
+
+    # --- folders to reprint ---
+    Write-Host ""
+    Write-Host "  Folders (TL / sequence) that need new or reprinted paperwork" -ForegroundColor Yellow
+    & $say "FOLDERS THAT NEED NEW OR REPRINTED PAPERWORK (folder label + work order)"
+    if ($ch.Folders.Count -eq 0) { Write-Host "    None: every folder is the same as before." -ForegroundColor Green; & $say "  None: every folder is the same as before." }
+    foreach ($f in $ch.Folders.Keys) {
+        $st = $ch.Folders[$f]
+        $color = switch ($st) { 'NEW' { 'Green' } 'CHANGED' { 'Yellow' } default { 'Red' } }
+        $txt = switch ($st) { 'NEW' { 'new folder: make it and print its label and work order' } 'CHANGED' { 'reprint the work order, check the folder contents' } default { 'no assemblies left: pull the folder' } }
+        Write-Host ("    {0,-8} {1,-18} {2}" -f $st, $f, $txt) -ForegroundColor $color
+        & $say ("  {0,-8} {1,-18} {2}" -f $st, $f, $txt)
+        $log.Add([PSCustomObject]@{ Change = "FOLDER $st"; Folder = $f; Assembly = ''; Detail = $txt })
+    }
+    & $say ""
+
+    # --- hand edits: merge ---
+    $asmDigits = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($r in @($AsmRows)) { [void]$asmDigits.Add(("$($r.Assembly)" -replace '\D', '')) }
+    $items = Get-EditItems -Prev $Prev -PrevState $PrevState -SettingsList $SettingsList -SequenceRows $SequenceRows -ExceptionRows $ExceptionRows -AsmDigits $asmDigits
+    $take = @($items | Where-Object { $_.State -eq 'TakeNew' })
+    $keep = @($items | Where-Object { $_.State -eq 'KeepOld' })
+    $conf = @($items | Where-Object { $_.State -eq 'Conflict' })
+
+    Write-Host ""
+    Write-Host "  Values you can edit in the workbook (due dates, paint, explanations, settings, exceptions)" -ForegroundColor Yellow
+    Write-Host ("    Updated from the new data (you had not edited them): {0}" -f $take.Count) -ForegroundColor Green
+    Write-Host ("    Your edits kept (the new data did not change them):   {0}" -f $keep.Count) -ForegroundColor Green
+    Write-Host ("    Need your decision:                                   {0}" -f $conf.Count) -ForegroundColor $(if ($conf.Count) { 'Yellow' } else { 'Green' })
+    & $say "HAND-EDITED VALUES: $($take.Count) updated from the new data, $($keep.Count) of your edits kept, $($conf.Count) needed a decision"
+    foreach ($i in $take) {
+        & $say "  UPDATED  $($i.Group): $($i.Label): '$(Format-EditValue $i $i.Old)' -> '$(Format-EditValue $i $i.New)'"
+        $log.Add([PSCustomObject]@{ Change = 'VALUE UPDATED'; Folder = ''; Assembly = ''; Detail = "$($i.Group): $($i.Label): '$(Format-EditValue $i $i.Old)' -> '$(Format-EditValue $i $i.New)'" })
+    }
+    foreach ($i in $keep) {
+        & $say "  KEPT     $($i.Group): $($i.Label): your '$(Format-EditValue $i $i.Old)' (new data says '$(Format-EditValue $i $i.New)')"
+        $log.Add([PSCustomObject]@{ Change = 'YOUR EDIT KEPT'; Folder = ''; Assembly = ''; Detail = "$($i.Group): $($i.Label): '$(Format-EditValue $i $i.Old)'" })
+    }
+
+    if ($conf.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  These differ between your old workbook and the new data:" -ForegroundColor Yellow
+        $n = 0
+        foreach ($i in $conf) {
+            $n++
+            Write-Host ("    [{0}] {1}: {2}" -f $n, $i.Group, $i.Label) -ForegroundColor White
+            Write-Host ("        yours (old workbook): '{0}'" -f (Format-EditValue $i $i.Old)) -ForegroundColor Gray
+            Write-Host ("        new (Required Assm / today): '{0}'" -f (Format-EditValue $i $i.New)) -ForegroundColor Gray
+        }
+        Write-Host ""
+        Write-Host "  [K] Keep yours (default)    [U] Use the new values    [R] Review one by one" -ForegroundColor Gray
+        $ans = (Read-Host "Which for these $($conf.Count)? [K]eep / [U]se new / [R]eview").Trim().ToUpper()
+        if ($ans -match '^U') { foreach ($i in $conf) { $i.Use = 'New' } }
+        elseif ($ans -match '^R') {
+            $n = 0
+            foreach ($i in $conf) {
+                $n++
+                Write-Host ""
+                Write-Host ("  [{0}/{1}] {2}: {3}" -f $n, $conf.Count, $i.Group, $i.Label) -ForegroundColor White
+                Write-Host ("      [K] yours: '{0}'" -f (Format-EditValue $i $i.Old)) -ForegroundColor Gray
+                Write-Host ("      [U] new:   '{0}'" -f (Format-EditValue $i $i.New)) -ForegroundColor Gray
+                $one = (Read-Host "Keep yours or use new? [K]eep (default) / [U]se new").Trim().ToUpper()
+                if ($one -match '^U') { $i.Use = 'New' }
+            }
+        }
+        & $say "DECISIONS"
+        foreach ($i in $conf) {
+            $kept = if ($i.Use -eq 'Old') { "kept yours '$(Format-EditValue $i $i.Old)'" } else { "used new '$(Format-EditValue $i $i.New)'" }
+            & $say "  $($i.Group): $($i.Label): $kept"
+            $log.Add([PSCustomObject]@{ Change = 'YOU DECIDED'; Folder = ''; Assembly = ''; Detail = "$($i.Group): $($i.Label): $kept" })
+        }
+    }
+    & $say ""
+
+    # --- apply the merged values to the rows the run is about to write ---
+    $use = { param($i) if ($i.Use -eq 'Old') { $i.Old } else { $i.New } }
+    $settingKeep = @{}
+    $schedDue = @{}
+    foreach ($i in $items) {
+        if ($i.State -eq 'Same') { continue }
+        $val = & $use $i
+        switch ($i.Group) {
+            'Settings' { if ($i.Use -eq 'Old') { $settingKeep[$i.Key] = $i.Old } }
+            'Statistics schedule' { if ($i.Use -eq 'Old') { $schedDue[$i.Key] = "$($i.Old)" } }
+            'Sequence Notes' {
+                $row = @($SequenceRows | Where-Object { "$($_.TL)|$($_.Sequence)" -eq $i.Key })[0]
+                if ($row) {
+                    switch ($i.Field) { 'Due' { $row.DueDate = "$val" } 'Paint' { $row.Paint = "$val" } 'Expl' { $row.Explanation = "$val" } }
+                }
+            }
+        }
+    }
+    foreach ($r in @($SequenceRows)) {
+        $sk = "$($r.TL) / $($r.Sequence)"
+        if ($Prev.Schedule.ContainsKey($sk) -and -not $schedDue.ContainsKey($sk) -and -not (@($items | Where-Object { $_.Group -eq 'Statistics schedule' -and $_.Key -eq $sk }))) { $schedDue[$sk] = "$($r.DueDate)" }
+    }
+    # Exceptions: apply per ASSM, creating a row for an ASSM that only the old workbook had an override for
+    $finalExc = [System.Collections.Generic.List[object]]::new()
+    foreach ($e in @($ExceptionRows)) { $finalExc.Add($e) }
+    foreach ($g in ($items | Where-Object { $_.Group -eq 'Assembly Exceptions' } | Group-Object Key)) {
+        $row = @($finalExc | Where-Object { "$($_.Assembly)" -eq $g.Name })[0]
+        $vals = @{ Due = ''; Paint = ''; Expl = '' }
+        foreach ($i in $g.Group) { $vals[$i.Field] = "$(& $use $i)" }
+        if (-not $row) {
+            if (-not ($vals.Due -or $vals.Paint -or $vals.Expl)) { continue }
+            $a = @($AsmRows | Where-Object { ("$($_.Assembly)" -replace '\D', '') -eq $g.Name } | Sort-Object { [int]$_.TlNumber })[0]
+            if (-not $a) { continue }
+            $tlName = if ($TlNames.ContainsKey([int]$a.TlNumber)) { $TlNames[[int]$a.TlNumber] } else { "TL$($a.TlNumber)" }
+            $row = [PSCustomObject]@{ Assembly = $g.Name; TL = $tlName; Sequence = $a.Sequence; Paint = ''; Explanation = ''; DueDate = '' }
+            $finalExc.Add($row)
+        }
+        $row.Paint = $vals.Paint; $row.Explanation = $vals.Expl; $row.DueDate = $vals.Due
+    }
+
+    # --- Master BOM status column: carried over for parts that did not change; a changed part says so ---
+    $statusMap = @{}
+    $carried = 0; $flagged = 0
+    foreach ($r in $Prev.Bom) {
+        $st = "$($r.Status)".Trim()
+        if (-not $st -or $st -ieq 'PENDING') { continue }
+        $k = "$($r.Asm)|$($r.Part)"
+        if ($ch.ChangedParts.Contains($k)) {
+            if ($st -notmatch '^REVISED') { $statusMap[$k] = "REVISED (was $st)"; $flagged++ } else { $statusMap[$k] = $st }
+        }
+        else { $statusMap[$k] = $st; $carried++ }
+    }
+    if ($carried + $flagged -gt 0) {
+        Write-Host ""
+        Write-Host "  Status column: $carried carried over unchanged; $flagged on parts that changed are marked REVISED (was ...)." -ForegroundColor Gray
+        & $say "STATUS COLUMN: $carried carried over; $flagged marked REVISED because the part changed"
+        & $say ""
+    }
+
+    # --- stuff outside what the update can carry over ---
+    Write-Host ""
+    Write-Host "  The previous workbook is kept as it is; this builds a new one. Anything you typed outside the cells listed above" -ForegroundColor DarkGray
+    Write-Host "  (for example on the Master BOM, plates or Shop Assemblies tabs) is not carried over." -ForegroundColor DarkGray
+
+    $reportPath = Join-Path $ReportFolder ("Update Report - {0} {1}.txt" -f (($JobLabel -replace '[\\/:*?"<>|]', '_').Trim()), $when.ToString('yyyyMMdd-HHmmss'))
+    try { [System.IO.File]::WriteAllLines($reportPath, $rep, (New-Object System.Text.UTF8Encoding($false))) } catch { $reportPath = $null }
+    if ($reportPath) { Write-Host "  Full report: $([System.IO.Path]::GetFileName($reportPath))" -ForegroundColor Gray }
+
+    Write-Host ""
+    $go = (Read-Host "Build the updated workbook now? [Y]es (default) / [N]o, stop here").Trim()
+    return [PSCustomObject]@{
+        Proceed = ($go -notmatch '^(n|no)$')
+        Status = $statusMap
+        SettingKeep = $settingKeep
+        SchedDue = $schedDue
+        ExceptionRows = @($finalExc)
+        Log = @($log)
+        ReportPath = $reportPath
+        FolderCount = $ch.Folders.Count
+    }
+}
+
+# "Update Log" tab: the same list as the report, inside the new workbook.
+function Add-UpdateLogSheet {
+    param($Workbook, $Rows, [string]$PreviousName)
+    $sheet = $Workbook.Sheets.Add([Type]::Missing, $Workbook.Sheets.Item($Workbook.Sheets.Count))
+    $sheet.Name = "Update Log"
+    $sheet.Cells.Font.Name = "Arial"
+    $n = @($Rows).Count
+    $data = New-Object "object[,]" ($n + 1), 5
+    $headers = @("Change", "Folder", "Assembly", "Detail")
+    for ($c = 0; $c -lt 4; $c++) { $data[0, $c] = $headers[$c] }
+    $data[0, 4] = "What changed compared with '$PreviousName' when this workbook was built. Folders marked NEW / CHANGED need new or reprinted labels and work orders."
+    for ($i = 0; $i -lt $n; $i++) {
+        $r = $Rows[$i]
+        $data[($i + 1), 0] = "$($r.Change)"; $data[($i + 1), 1] = "$($r.Folder)"; $data[($i + 1), 2] = "$($r.Assembly)"; $data[($i + 1), 3] = "$($r.Detail)"
+    }
+    $sheet.Range("A2:D$($n + 2)").NumberFormat = "@"
+    Write-SheetArray -Sheet $sheet -Data $data -RowCount ($n + 1) -ColCount 5
+    $hdr = $sheet.Range("A1:D1")
+    $hdr.Font.Bold = $true
+    $hdr.Font.Color = Get-OleColor 255 255 255
+    $hdr.Interior.Color = Get-OleColor 27 54 93
+    $sheet.Range("E1").Font.Italic = $true
+    $widths = [double[]]@(18, 20, 14, 90)
+    for ($c = 0; $c -lt $widths.Count; $c++) { $sheet.Columns.Item($c + 1).ColumnWidth = $widths[$c] }
+    if ($n -gt 0) { [void]$sheet.Range("A1:D$($n + 1)").AutoFilter() }
+    return $sheet
+}
+
+# Notes shown next to each .kss file on the selection screen of an update: used by the previous workbook, NEW, or CHANGED since.
+function Get-KssUpdateNotes {
+    param($Prev, $PrevState, [string]$Folder)
+    $notes = @{}
+    $used = @($Prev.SourceFiles)
+    foreach ($f in @(Get-ChildItem -LiteralPath $Folder -Filter *.kss -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch ' - Filtered Assemblies' -and $_.Name -notmatch ' \(Generated\)' })) {
+        $wasUsed = ($used | Where-Object { $_ -ieq $f.Name }).Count -gt 0
+        if ($PrevState -and $PrevState.Files.Count -gt 0) {
+            if ($PrevState.Files.ContainsKey($f.Name)) {
+                $h = ""
+                try { $h = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash } catch { }
+                $notes[$f.Name] = if ($h -and $PrevState.Files[$f.Name] -and $h -ne $PrevState.Files[$f.Name]) { 'CHANGED' } else { 'same as before' }
+            }
+            else { $notes[$f.Name] = 'NEW' }
+        }
+        elseif ($wasUsed) { $notes[$f.Name] = if ($f.LastWriteTime -gt $Prev.Built) { 'CHANGED' } else { 'same as before' } }
+        elseif ($f.LastWriteTime -gt $Prev.Built) { $notes[$f.Name] = 'NEW' }
+    }
+    return $notes
+}
+
+
 # 1. CHECK THE COMPUTER, THEN THE MAIN MENU
 try { Clear-Host } catch { }
 Write-Host ""
@@ -4222,6 +4936,11 @@ while ($true) {
     }
     break
 }
+$updateMode = ($menuChoice -eq 'U')
+$script:UpdateMode = $false
+$script:UpdateStatus = $null; $script:UpdateSettingKeep = $null; $script:UpdateSchedDue = $null; $script:UpdateLogRows = @()
+$script:FreshSeeds = $null
+$prevBom = $null; $prevState = $null; $prevFolder = $null
 try { Clear-Host } catch { }
 Write-Host ""
 Write-Host "  Working folder: $((Get-Location).Path)" -ForegroundColor DarkGray
@@ -4286,7 +5005,40 @@ if ($modeChoice -eq "2") {
 }
 else {
     # --- KSS FILE MODE ---
-    $kssFiles = @(Select-KssFiles)
+    $kssNotes = @{}
+    $preTick = @()
+    if ($updateMode) {
+        $prevPath = Select-RequiredAssmFile -NamePattern '(?i)\sBOM(\s\d{8}-\d{6})?\.xlsx$' -ExcludePattern '(?i)before update' `
+            -Heading 'Previous BOM workbook' -Noun 'BOM workbooks' -SkipText 'Cancel (run a normal build instead)'
+        if ($prevPath) {
+            try {
+                Write-Log "Reading the previous workbook (Excel runs hidden)..."
+                $prevBom = Read-PreviousBom -Path $prevPath -SettingNames @(Get-SettingsList | ForEach-Object { $_[0] })
+                $prevState = Read-KissState $prevPath
+                $prevFolder = Split-Path -Parent $prevPath
+                $prevAsm = @($prevBom.Bom | ForEach-Object { $_.Asm } | Select-Object -Unique).Count
+                $prevTls = @($prevBom.Bom | ForEach-Object { $_.Tl } | Where-Object { $_ } | Select-Object -Unique)
+                Write-Log "Previous workbook: $prevAsm assemblies, $($prevBom.Bom.Count) part rows, transmittals $($prevTls -join ', ')" "Green"
+                if (-not $prevState) { Write-Log "No 'last build' record next to it (it was made before updates existed). Values that differ will be shown for you to choose." "Yellow" }
+                $kssNotes = Get-KssUpdateNotes -Prev $prevBom -PrevState $prevState -Folder (Get-Location).Path
+                $preTick = @(@($kssNotes.Keys | Where-Object { $kssNotes[$_] }) + @($prevBom.SourceFiles))
+                $newFiles = @($kssNotes.Keys | Where-Object { $kssNotes[$_] -eq 'NEW' } | Sort-Object)
+                $changedFiles = @($kssNotes.Keys | Where-Object { $kssNotes[$_] -eq 'CHANGED' } | Sort-Object)
+                if ($newFiles.Count -gt 0) { Write-Log "New .kss file(s) since then: $($newFiles -join ', ')" "Yellow" }
+                if ($changedFiles.Count -gt 0) { Write-Log "Changed .kss file(s) since then: $($changedFiles -join ', ')" "Yellow" }
+                Write-Log "The files the previous workbook used and any new / changed ones are ticked for you. A new TL that came without a .kss needs no file: its assemblies are found in the ticked ones." "Gray"
+                Start-Sleep -Milliseconds 600
+            }
+            catch {
+                Write-Log "Could not read the previous workbook: $($_.Exception.Message)" "Red"
+                Write-Log "Running a normal build instead." "Yellow"
+                $updateMode = $false; $prevBom = $null; $prevState = $null
+            }
+        }
+        else { Write-Log "No previous workbook picked; running a normal build instead." "Yellow"; $updateMode = $false }
+    }
+    $script:UpdateMode = $updateMode
+    $kssFiles = @(Select-KssFiles -Notes $kssNotes -PreTick $preTick)
     if ($kssFiles.Count -eq 0) {
         Write-Log "No KSS files selected. Put the job's .kss files in this folder ($((Get-Location).Path)) and run again." "Red"
         return
@@ -4447,14 +5199,22 @@ $workbookTLs = @()
 $ourJobNumber = ""
 $issuedBy = ""
 if ($modeChoice -ne "2") {
-    $requiredAssmPath = Select-RequiredAssmFile -ExtraFolders @($kssFiles | ForEach-Object { Split-Path -Parent $_.FullName })
+    $requiredAssmPath = Select-RequiredAssmFile -ExtraFolders @(@($kssFiles | ForEach-Object { Split-Path -Parent $_.FullName }) + @($prevFolder))
     $guessJob = ""
     if ($requiredAssmPath -and [System.IO.Path]::GetFileName($requiredAssmPath) -match '^\s*(\d{4,6})') { $guessJob = $Matches[1] }
+    $prevInitials = ""
+    if ($updateMode) {
+        $pj = if ($prevBom.Settings.ContainsKey('Set_OurJob')) { Get-CellText $prevBom.Settings['Set_OurJob'] } else { "" }
+        if ($pj) { $guessJob = $pj }
+        if ($prevBom.Settings.ContainsKey('Set_Initials')) { $prevInitials = Get-CellText $prevBom.Settings['Set_Initials'] }
+    }
     $jobPrompt = if ($guessJob) { "Our job number (default: $guessJob)" } else { "Our job number (shown on the labels and work orders)" }
     $ourJobInput = (Read-Host $jobPrompt).Trim()
     $ourJobNumber = if ($ourJobInput) { $ourJobInput } else { $guessJob }
     if ($requiredAssmPath) {
-        $issuedBy = (Read-Host "Initials of who is making the folders (Enter to leave blank)").Trim().ToUpper()
+        $initialsPrompt = if ($prevInitials) { "Initials of who is making the folders (Enter = $prevInitials)" } else { "Initials of who is making the folders (Enter to leave blank)" }
+        $issuedBy = (Read-Host $initialsPrompt).Trim().ToUpper()
+        if (-not $issuedBy -and $prevInitials) { $issuedBy = $prevInitials.ToUpper() }
         # The workbook is read now because it decides which assemblies are in this run (see "Assembly filter" below).
         try {
             Write-Log "Reading the Required Assm workbook..."
@@ -4469,6 +5229,16 @@ $usedWorkbookFilter = $false
 if ($workbookTLs.Count -gt 0 -and $modeChoice -ne "2") {
     # A Required Assm workbook is the filter: its assemblies, per transmittal (REV columns included), are the run.
     Write-Section "Assembly filter (from the Required Assm workbook)"
+    if ($updateMode) {
+        # Every transmittal in the workbook is part of the job. One that has no .kss file selected (it came without one) is placed
+        # by its assembly numbers from the files that are selected.
+        $haveNums = @($allTLs | ForEach-Object { [int]($_ -replace '\D', '0') })
+        $extraTLs = @($workbookTLs | Where-Object { $haveNums -notcontains [int]$_.Number } | Sort-Object Number)
+        if ($extraTLs.Count -gt 0) {
+            $allTLs = @($allTLs) + @($extraTLs | ForEach-Object { $_.TL })
+            Write-Log "In the Required Assm workbook with no .kss file of their own: $(($extraTLs | ForEach-Object { $_.TL }) -join ', '). Their assemblies are taken from the selected .kss files." "Cyan"
+        }
+    }
     $wf = Get-WorkbookAssemblyFilter -WorkbookTLs $workbookTLs -RunTLs $allTLs
     if ($wf.AssemblyCount -eq 0) {
         Write-Log "None of the selected transmittals ($($allTLs -join ', ')) has assemblies in the workbook, so it cannot filter this run." "Yellow"
@@ -4593,8 +5363,14 @@ if ($sourceNames.Count -gt 1) {
     Write-Host "  [M] Merge (default): one row per part, quantities added (purchasing, full BOM)"
     Write-Host "  [S] Separate: one row per part per TL (comparing TLs, REV tracking)"
     Write-Host ""
-    $dupChoice = Read-Host "Duplicates across files: [M]erge (default) or [S]eparate?"
-    if ($dupChoice -match '^\s*s') { $mergeDuplicates = $false }
+    if ($updateMode -and $prevState -and $null -ne $prevState.Merge) {
+        $mergeDuplicates = [bool]$prevState.Merge
+        Write-Log "Same choice as the last build: $(if ($mergeDuplicates) { 'Merge' } else { 'Separate' })." "Gray"
+    }
+    else {
+        $dupChoice = Read-Host "Duplicates across files: [M]erge (default) or [S]eparate?"
+        if ($dupChoice -match '^\s*s') { $mergeDuplicates = $false }
+    }
 
     if ($mergeDuplicates) {
         $conflicts = @($sharedMarks | Where-Object { @($_.Group | ForEach-Object { "$($_.Shape)|$($_.Size)|$($_.Grade)|$($_.Length)".ToLowerInvariant() } | Select-Object -Unique).Count -gt 1 })
@@ -4793,6 +5569,37 @@ if ($modeChoice -ne "2") {
 }
 
 
+# --- WHAT THE INPUTS SAY NOW (saved next to the workbook for the next update), and the update review ---
+$settingsPm = "Tyler / Matt / Rob"
+if ($modeChoice -ne "2") {
+    $settingsNow = @(Get-SettingsList -Title $projectName.ToUpper() -CustomerJob $jobNumber -OurJob $ourJobNumber -Initials $issuedBy -ProjectManagers $settingsPm)
+    $script:FreshSeeds = Get-FreshSeeds -SettingsList $settingsNow -SequenceRows $sequenceNoteRows -ExceptionRows $script:ExceptionRows
+    if ($updateMode) {
+        $stillRequired = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($tlEntry in @($allWorkbookTLs)) { foreach ($set in $tlEntry.SeqAssemblies.Values) { foreach ($a in $set) { [void]$stillRequired.Add($a) } } }
+        $missingAsm = if ($whitelistResult -and $whitelistResult.Applied) { @($whitelistResult.Missing) } else { @() }
+        $newBomRows = @(Get-NewBomRows -MasterData $masterData -AsmByKey $asmByKey -TlNames $tlNames)
+        $reviewLabel = (@($projectName, $(if ($ourJobNumber) { $ourJobNumber } else { $jobNumber })) | Where-Object { $_ }) -join " - "
+        $review = Invoke-UpdateReview -Prev $prevBom -PrevState $prevState -NewRows $newBomRows -StillRequired $stillRequired -SettingsList $settingsNow `
+            -SequenceRows $sequenceNoteRows -ExceptionRows $script:ExceptionRows -AsmRows $asmRows -TlNames $tlNames -KssFiles $kssFiles -KssNotes $kssNotes `
+            -MissingAssemblies $missingAsm -ReportFolder (Get-Location).Path -JobLabel $reviewLabel
+        if (-not $review.Proceed) {
+            Write-Log "Stopped before building. Nothing was changed; the previous workbook is as it was." "Yellow"
+            try { $workbook.Close($false); $excel.Quit() } catch { }
+            return
+        }
+        $script:ExceptionRows = @($review.ExceptionRows)
+        $script:AsmExceptions = @{}
+        foreach ($e in $script:ExceptionRows) { $script:AsmExceptions[$e.Assembly] = $e }
+        $script:UpdateStatus = $review.Status
+        $script:UpdateSettingKeep = $review.SettingKeep
+        $script:UpdateSchedDue = $review.SchedDue
+        $script:UpdateLogRows = @($review.Log)
+        if ($review.ReportPath) { Add-OutputFile $review.ReportPath }
+    }
+}
+
+
 # --- TAB 1: MASTER BOM ---
 Write-Log "Building Tab 1: Master BOM..."
 $sheet1 = $workbook.Sheets.Item(1)
@@ -4831,6 +5638,10 @@ for ($i = 0; $i -lt $mRows; $i++) {
     $mData[$i, 12] = $item.Weight
     $mData[$i, 13] = "=F$(2+$i)*M$(2+$i)"
     $mData[$i, 14] = "PENDING"
+    if ($script:UpdateStatus) {
+        $statusKey = "$($item.Assembly)|$($item.PartMark)"
+        if ($script:UpdateStatus.ContainsKey($statusKey)) { $mData[$i, 14] = $script:UpdateStatus[$statusKey] }
+    }
     $mData[$i, 15] = $item.SourceFile
     if ($modeChoice -ne "2") {
         $a = $asmByKey["$($item.TL)|$($item.Assembly)"]
@@ -5340,7 +6151,14 @@ if ($laborData.Count -gt 0) {
 
 
 # --- SETTINGS TAB: the named cells the labels, work orders and Statistics read ---
-[void](Add-SettingsSheet -Workbook $workbook -Title $projectName.ToUpper() -CustomerJob $jobNumber -OurJob $ourJobNumber -Initials $issuedBy -ProjectManagers "Tyler / Matt / Rob")
+[void](Add-SettingsSheet -Workbook $workbook -Title $projectName.ToUpper() -CustomerJob $jobNumber -OurJob $ourJobNumber -Initials $issuedBy -ProjectManagers $settingsPm)
+if ($script:UpdateSettingKeep) {
+    # Update: the settings you changed by hand in the previous workbook stay as you had them
+    foreach ($settingName in @($script:UpdateSettingKeep.Keys)) {
+        try { $workbook.Names.Item($settingName).RefersToRange.Value2 = $script:UpdateSettingKeep[$settingName] }
+        catch { Write-Log "Could not keep your $settingName setting: $($_.Exception.Message)" "Yellow" }
+    }
+}
 
 # --- TAB 0: PROJECT STATISTICS (Excel formulas only) ---
 Write-Log "Building front statistics dashboard..."
@@ -6436,7 +7254,9 @@ Write-Section "Quality Process Report (QPR)"
 Write-Host "  [N] No (default): skip it"
 Write-Host "  [Y] Yes: shop-floor inspection sheets, added as tabs to the BOM and saved as their own workbook"
 Write-Host ""
-$qprChoice = Read-Host "Generate Quality Process Report (QPR)? [Y]es / [N]o (default: No)"
+$qprDefaultYes = ($updateMode -and $prevState -and $prevState.Qpr)
+$qprChoice = Read-Host "Generate Quality Process Report (QPR)? [Y]es / [N]o (default: $(if ($qprDefaultYes) { 'Yes, as last time' } else { 'No' }))"
+if (-not $qprChoice.Trim() -and $qprDefaultYes) { $qprChoice = 'y' }
 if ($qprChoice -match '^(y|yes)$') {
     Write-Host ""
     if ($ourJobNumber) {
@@ -6456,6 +7276,7 @@ if ($qprChoice -match '^(y|yes)$') {
     Write-Host ""
     $qprGroupChoice = Read-Host "Organize sheets by [T]L number (default) or [S]equence?"
     $qprGroupBy = if ($qprGroupChoice -match '^(s|sequence)$') { "Sequence" } else { "TL" }
+    if (-not $qprGroupChoice.Trim() -and $updateMode -and $prevState -and $prevState.QprBy -eq 'Sequence') { $qprGroupBy = "Sequence" }
 }
 
 # --- TAB: FOLDER LABELS (only when a Required Assm workbook was chosen) ---
@@ -6534,10 +7355,20 @@ if ($qprChoice -match '^(y|yes)$') {
 # --- STATISTICS EXTRAS (below the existing tables; schedule needs the folder rows from the Required Assm workbook) ---
 try {
     $scheduleFolders = @($labelData | ForEach-Object { if ($_) { [PSCustomObject]@{ TL = $_.TL; Sequence = $_.Sequence; DueDate = $_.DueDate } } })
+    if ($script:UpdateSchedDue) {
+        foreach ($sf in $scheduleFolders) {
+            $sk = "$($sf.TL) / $($sf.Sequence)"
+            if ($sf -and $script:UpdateSchedDue.ContainsKey($sk)) { $sf.DueDate = $script:UpdateSchedDue[$sk] }
+        }
+    }
     Add-DashboardExtras -Dashboard $dashboard -MasterData $masterData -Folders $scheduleFolders
 }
 catch {
     Write-Log "Could not build the Statistics schedule section: $($_.Exception.Message)" "Red"
+}
+if ($script:UpdateMode -and $script:UpdateLogRows.Count -gt 0) {
+    try { [void](Add-UpdateLogSheet -Workbook $workbook -Rows $script:UpdateLogRows -PreviousName ([System.IO.Path]::GetFileName($prevBom.Path))) }
+    catch { Write-Log "Could not build the Update Log tab: $($_.Exception.Message)" "Yellow" }
 }
 # Sheet presentation setup
 $dashboard.Move($workbook.Sheets.Item(1))
@@ -6561,7 +7392,15 @@ $exportPath = Join-Path (Get-Location) "$safeProjectName - Job $jobNumber$tlName
 
 if (Test-Path $exportPath) {
     try {
-        Remove-Item $exportPath -Force -ErrorAction Stop
+        if ($script:UpdateMode) {
+            # Update: the previous workbook (and its record) is kept under a new name, never overwritten
+            $backup = Join-Path (Get-Location) ([System.IO.Path]::GetFileNameWithoutExtension($exportPath) + " (before update " + (Get-Date -Format 'yyyyMMdd-HHmmss') + ").xlsx")
+            Move-Item -LiteralPath $exportPath -Destination $backup -ErrorAction Stop
+            $oldStateFile = Get-KissStatePath $exportPath
+            if (Test-Path -LiteralPath $oldStateFile) { Move-Item -LiteralPath $oldStateFile -Destination (Get-KissStatePath $backup) -ErrorAction SilentlyContinue }
+            Write-Log "The previous workbook was kept as: $([System.IO.Path]::GetFileName($backup))" "Yellow"
+        }
+        else { Remove-Item $exportPath -Force -ErrorAction Stop }
     }
     catch {
         $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -6574,6 +7413,14 @@ if (Test-Path $exportPath) {
 $sheet1.Activate()
 $workbook.SaveAs($exportPath)
 Add-OutputFile $exportPath
+if ($modeChoice -ne "2" -and $script:FreshSeeds) {
+    # The "last build" record: which .kss files and what the inputs said, so the next update can tell your edits from input changes
+    try {
+        Save-KissState -WorkbookPath $exportPath -Fresh $script:FreshSeeds -KssFiles $kssFiles -Merge $mergeDuplicates `
+            -Qpr ($qprChoice -match '^(y|yes)$') -QprBy "$qprGroupBy"
+    }
+    catch { Write-Log "Could not save the last-build record (updates will ask more questions): $($_.Exception.Message)" "Yellow" }
+}
 $workbook.Close($false)
 $excel.Quit()
 
@@ -6631,6 +7478,7 @@ $groups = [ordered]@{
     'Workbooks'      = @($script:OutputFiles | Where-Object { $_ -like '*.xlsx' })
     'Filtered KISS'  = @($script:OutputFiles | Where-Object { $_ -like '*.kss' })
     'Shop scripts'   = @($script:OutputFiles | Where-Object { $_ -like '*.bat' })
+    'Update report'  = @($script:OutputFiles | Where-Object { $_ -like '*.txt' })
 }
 foreach ($g in $groups.Keys) {
     if ($groups[$g].Count -gt 0) {

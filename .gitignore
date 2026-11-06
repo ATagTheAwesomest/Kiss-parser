@@ -19,4 +19,4 @@ dxf/
 jobs/
 
 # Last-build record next to each workbook
-*.kiss.json
+*.kiss-state

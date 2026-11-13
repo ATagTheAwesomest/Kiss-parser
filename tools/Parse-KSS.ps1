@@ -1199,12 +1199,23 @@ function Set-CellFormulaText ($Range, [string]$Formula, [string]$NumberFormat = 
     $Range.NumberFormat = $NumberFormat
     $Range.Cells.Item(1, 1).Formula = $Formula
 }
+# Statistics weight = ASSEMBLY weight. The piece weight on the Master BOM (Unit Wt / Total Wt) is not reliable, and the assembly
+# columns (Asm Wt Total) repeat on every part row of an assembly, so a plain SUM would count each assembly once per part. Each row
+# therefore contributes its assembly weight divided by the number of rows of that TL + assembly, which adds up to exactly one count.
+# $Cond is an optional leading array condition such as "(rng=J9)*". The CSV mode has no assembly weights and falls back to the piece weight.
+function Get-AsmWtSumFormula {
+    param([string]$Cond = "", [string]$TlRef, [string]$AsmRef, [string]$AsmWtRef, [string]$PieceWtRef)
+    if ($modeChoice -eq "2") { return "=SUMPRODUCT($Cond$PieceWtRef)" }
+    return "=SUMPRODUCT($Cond$AsmWtRef/COUNTIFS($TlRef,$TlRef,$AsmRef,$AsmRef))"
+}
+
 # --- STATISTICS EXTRAS: schedule, sequence and plate-vs-profile tables plus headline ratios, all live formulas on the Master BOM table ---
 # Folders = one row per (TL, sequence) from the Required Assm workbook ($Folders: TL, Sequence, DueDate); Due dates are cells you can edit.
 function Add-DashboardExtras {
     param($Dashboard, $MasterData, $Folders)
 
     $wt = "MasterBOMTable[Total Wt (lbs)]"
+    $awt = "MasterBOMTable[Asm Wt Total (lbs)]"
     $qty = "MasterBOMTable[Qty]"
     $tlCol = "MasterBOMTable[TL '#]"   # # is a special character in structured references
     $asmCol = "MasterBOMTable[Assembly]"
@@ -1236,13 +1247,13 @@ function Add-DashboardExtras {
     $seqs = @($rows | ForEach-Object { $_.Seq } | Sort-Object -Unique)
 
     # --- TL / sequence detail (J:M) ---
-    & $header $top 10 13 "TL / SEQUENCE DETAIL" @("TL #", "Sequence", "Assemblies", "Total Wt (lbs)")
+    & $header $top 10 13 "TL / SEQUENCE DETAIL" @("TL #", "Sequence", "Assemblies", "Total Assm Wt (lbs)")
     $r = $top + 2; $detailFirst = $r
     foreach ($k in $rows) {
         $Dashboard.Cells.Item($r, 10).NumberFormat = "@"; $Dashboard.Cells.Item($r, 10).Value2 = $k.TL
         $Dashboard.Cells.Item($r, 11).NumberFormat = "@"; $Dashboard.Cells.Item($r, 11).Value2 = $k.Seq
         $Dashboard.Cells.Item($r, 12).Formula2 = "=IFERROR(ROWS(UNIQUE(FILTER($asmCol,($tlCol=J$r)*(LEFT($asmCol,4)=K$r)))),0)"
-        $Dashboard.Cells.Item($r, 13).Formula = "=SUMPRODUCT(($tlCol=J$r)*(LEFT($asmCol,4)=K$r)*$wt)"
+        $Dashboard.Cells.Item($r, 13).Formula = (Get-AsmWtSumFormula "($tlCol=J$r)*(LEFT($asmCol,4)=K$r)*" $tlCol $asmCol $awt $wt)
         $Dashboard.Cells.Item($r, 13).NumberFormat = "#,##0.00"
         $r++
     }
@@ -1250,13 +1261,13 @@ function Add-DashboardExtras {
     & $grid $detailFirst $detailLast 10 13
 
     # --- sequence summary across TLs (E:H) ---
-    & $header $top 5 8 "SEQUENCE SUMMARY (ALL TLs)" @("Sequence", "Assemblies", "Part Pieces", "Total Wt (lbs)")
+    & $header $top 5 8 "SEQUENCE SUMMARY (ALL TLs)" @("Sequence", "Assemblies", "Part Pieces", "Total Assm Wt (lbs)")
     $r = $top + 2; $seqFirst = $r
     foreach ($s in $seqs) {
         $Dashboard.Cells.Item($r, 5).NumberFormat = "@"; $Dashboard.Cells.Item($r, 5).Value2 = $s
         $Dashboard.Cells.Item($r, 6).Formula2 = "=IFERROR(ROWS(UNIQUE(FILTER($asmCol,LEFT($asmCol,4)=E$r))),0)"
         $Dashboard.Cells.Item($r, 7).Formula = "=SUMPRODUCT((LEFT($asmCol,4)=E$r)*$qty)"
-        $Dashboard.Cells.Item($r, 8).Formula = "=SUMPRODUCT((LEFT($asmCol,4)=E$r)*$wt)"
+        $Dashboard.Cells.Item($r, 8).Formula = (Get-AsmWtSumFormula "(LEFT($asmCol,4)=E$r)*" $tlCol $asmCol $awt $wt)
         $Dashboard.Cells.Item($r, 7).NumberFormat = "#,##0"
         $Dashboard.Cells.Item($r, 8).NumberFormat = "#,##0.00"
         $r++
@@ -1265,12 +1276,12 @@ function Add-DashboardExtras {
     & $grid $seqFirst $seqLast 5 8
 
     # --- plate vs profile by TL (T:W) ---
-    & $header $top 20 23 "PLATE vs PROFILE BY TL" @("TL #", "Plate (lbs)", "Profile (lbs)", "Plate % of both")
+    & $header $top 20 23 "PLATE vs PROFILE BY TL (piece counts)" @("TL #", "Plate (pcs)", "Profile (pcs)", "Plate % of both")
     $r = $top + 2; $ppFirst = $r
     foreach ($tl in $tls) {
         $Dashboard.Cells.Item($r, 20).NumberFormat = "@"; $Dashboard.Cells.Item($r, 20).Value2 = $tl
-        $Dashboard.Cells.Item($r, 21).Formula = "=SUMIFS($wt,$tlCol,T$r,$catCol,`"Plate`")"
-        $Dashboard.Cells.Item($r, 22).Formula = "=SUMIFS($wt,$tlCol,T$r,$catCol,`"Profile`")"
+        $Dashboard.Cells.Item($r, 21).Formula = "=SUMIFS($qty,$tlCol,T$r,$catCol,`"Plate`")"
+        $Dashboard.Cells.Item($r, 22).Formula = "=SUMIFS($qty,$tlCol,T$r,$catCol,`"Profile`")"
         $Dashboard.Cells.Item($r, 23).Formula = "=IFERROR(U$r/(U$r+V$r),0)"
         $Dashboard.Cells.Item($r, 21).NumberFormat = "#,##0"; $Dashboard.Cells.Item($r, 22).NumberFormat = "#,##0"; $Dashboard.Cells.Item($r, 23).NumberFormat = "0.0%"
         $r++
@@ -1320,9 +1331,9 @@ function Add-DashboardExtras {
     $dRange = "J${detailFirst}:J$detailLast"; $dSeq = "K${detailFirst}:K$detailLast"; $dWt = "M${detailFirst}:M$detailLast"
     $headlines = @(
         @("TL + sequence combinations", "=ROWS($dRange)", "#,##0", "TL / Sequence Detail"),
-        @("Plate share of weight", "=IFERROR(SUMIFS($wt,$catCol,`"Plate`")/SUM($wt),0)", "0.0%", "Master BOM [Category]"),
-        @("Profile share of weight", "=IFERROR(SUMIFS($wt,$catCol,`"Profile`")/SUM($wt),0)", "0.0%", "Master BOM [Category]"),
-        @("Hardware share of weight", "=IFERROR(SUMIFS($wt,$catCol,`"Hardware`")/SUM($wt),0)", "0.0%", "Master BOM [Category]"),
+        @("Plate share of pieces", "=IFERROR(SUMIFS($qty,$catCol,`"Plate`")/SUM($qty),0)", "0.0%", "Master BOM [Category]"),
+        @("Profile share of pieces", "=IFERROR(SUMIFS($qty,$catCol,`"Profile`")/SUM($qty),0)", "0.0%", "Master BOM [Category]"),
+        @("Hardware share of pieces", "=IFERROR(SUMIFS($qty,$catCol,`"Hardware`")/SUM($qty),0)", "0.0%", "Master BOM [Category]"),
         @("Heaviest TL / sequence", "=IFERROR(INDEX($dRange,MATCH(MAX($dWt),$dWt,0))&`" / `"&INDEX($dSeq,MATCH(MAX($dWt),$dWt,0)),`"`")", "General", "TL / Sequence Detail"),
         @("Heaviest TL / sequence (tons)", "=MAX($dWt)/2000", "#,##0.0", "TL / Sequence Detail"),
         @("Average tons per TL / sequence", "=IFERROR(SUM($dWt)/ROWS($dWt)/2000,0)", "#,##0.0", "TL / Sequence Detail"),
@@ -6253,6 +6264,13 @@ if ($hCount -gt 0) { $lastHwRow = $hCount + 1 }
 $lastLbRow = 2
 if ($lRows -gt 0) { $lastLbRow = $lRows + 1 }
 
+# Master BOM ranges for the assembly-weight formulas (X = Asm Wt Ea, Y = Asm Wt Total, W = Asm Qty; they repeat on every part row of an assembly)
+$mbTL  = "'Master BOM'!`$A`$2:`$A`$$lastMbRow"
+$mbAsm = "'Master BOM'!`$B`$2:`$B`$$lastMbRow"
+$mbAsmEa  = "'Master BOM'!`$X`$2:`$X`$$lastMbRow"
+$mbAsmTot = "'Master BOM'!`$Y`$2:`$Y`$$lastMbRow"
+$mbPieceTot = "'Master BOM'!`$N`$2:`$N`$$lastMbRow"
+
 # =========================================================================
 # TITLE BANNER & EXECUTIVE HEADER (Rows 1 - 5)
 # =========================================================================
@@ -6345,8 +6363,8 @@ $dashboard.Range("A8:C8").Borders.Color = Get-OleColor 166 166 166
 $masterStats = @(
     @{ Name = "Total Detail Line Items"; Formula = "=COUNTA('Master BOM'!`$B`$2:`$B`$$lastMbRow)"; Tab = "Master BOM (D rows)"; Fmt = "#,##0" },
     @{ Name = "Total Part Piece Count"; Formula = "=SUM('Master BOM'!`$F`$2:`$F`$$lastMbRow)"; Tab = "Master BOM [Qty]"; Fmt = "#,##0" },
-    @{ Name = "Total Material Weight (lbs)"; Formula = "=SUM('Master BOM'!`$N`$2:`$N`$$lastMbRow)"; Tab = "Master BOM [Total Wt]"; Fmt = "#,##0.00" },
-    @{ Name = "Total Material Weight (Tons)"; Formula = "=B11/2000"; Tab = "Total lbs / 2000"; Fmt = "#,##0.000" },
+    @{ Name = "Total Assembly Weight (lbs)"; Formula = (Get-AsmWtSumFormula "" $mbTL $mbAsm $mbAsmTot $mbPieceTot); Tab = "Master BOM [Asm Wt Total]"; Fmt = "#,##0.00" },
+    @{ Name = "Total Assembly Weight (Tons)"; Formula = "=B11/2000"; Tab = "Total lbs / 2000"; Fmt = "#,##0.000" },
     @{ Name = "Distinct Assemblies Count"; Formula = "=COUNTA(UNIQUE('Master BOM'!`$B`$2:`$B`$$lastMbRow))"; Tab = "Master BOM [Assembly]"; Fmt = "#,##0" },
     @{ Name = "Distinct Part Marks Count"; Formula = "=COUNTA(UNIQUE('Master BOM'!`$E`$2:`$E`$$lastMbRow))"; Tab = "Master BOM [PartMark]"; Fmt = "#,##0" },
     @{ Name = "Distinct Material Shapes"; Formula = "=COUNTA(UNIQUE('Master BOM'!`$H`$2:`$H`$$lastMbRow))"; Tab = "Master BOM [Shape]"; Fmt = "#,##0" },
@@ -6356,9 +6374,9 @@ $masterStats = @(
     @{ Name = "Average Part Quantity / Line"; Formula = "=AVERAGE('Master BOM'!`$F`$2:`$F`$$lastMbRow)"; Tab = "Master BOM [Qty]"; Fmt = "#,##0.0" },
     @{ Name = "Maximum Quantity on Single Line"; Formula = "=MAX('Master BOM'!`$F`$2:`$F`$$lastMbRow)"; Tab = "Master BOM [Qty]"; Fmt = "#,##0" },
     @{ Name = "Minimum Quantity on Single Line"; Formula = "=MIN('Master BOM'!`$F`$2:`$F`$$lastMbRow)"; Tab = "Master BOM [Qty]"; Fmt = "#,##0" },
-    @{ Name = "Average Unit Weight (lbs)"; Formula = "=AVERAGE('Master BOM'!`$M`$2:`$M`$$lastMbRow)"; Tab = "Master BOM [Unit Wt]"; Fmt = "#,##0.00" },
-    @{ Name = "Maximum Unit Weight (lbs)"; Formula = "=MAX('Master BOM'!`$M`$2:`$M`$$lastMbRow)"; Tab = "Master BOM [Unit Wt]"; Fmt = "#,##0.00" },
-    @{ Name = "Maximum Extended Weight (lbs)"; Formula = "=MAX('Master BOM'!`$N`$2:`$N`$$lastMbRow)"; Tab = "Master BOM [Total Wt]"; Fmt = "#,##0.00" },
+    @{ Name = "Average Assm Weight Ea (lbs)"; Formula = "=IFERROR(AVERAGEIF($mbAsmEa,`">0`"),0)"; Tab = "Master BOM [Asm Wt Ea]"; Fmt = "#,##0.00" },
+    @{ Name = "Maximum Assm Weight Ea (lbs)"; Formula = "=MAX($mbAsmEa)"; Tab = "Master BOM [Asm Wt Ea]"; Fmt = "#,##0.00" },
+    @{ Name = "Maximum Total Assm Weight (lbs)"; Formula = "=MAX($mbAsmTot)"; Tab = "Master BOM [Asm Wt Total]"; Fmt = "#,##0.00" },
     @{ Name = "Avg Weight per Assembly (lbs)"; Formula = "=B11/B13"; Tab = "Total lbs / Assms"; Fmt = "#,##0.00" },
     @{ Name = "Avg Parts per Assembly"; Formula = "=B10/B13"; Tab = "Total Pcs / Assms"; Fmt = "#,##0.0" }
 )
@@ -6390,7 +6408,7 @@ $dashboard.Range("E7:H7").HorizontalAlignment = -4108
 $dashboard.Cells.Item(8, 5) = "Sheet / Department"
 $dashboard.Cells.Item(8, 6) = "Line Items"
 $dashboard.Cells.Item(8, 7) = "Total Qty"
-$dashboard.Cells.Item(8, 8) = "Total Wt (lbs)"
+$dashboard.Cells.Item(8, 8) = "Avg Qty / Line"
 $dashboard.Range("E8:H8").Font.Bold = $true
 $dashboard.Range("E8:H8").Font.Size = 9
 $dashboard.Range("E8:H8").Interior.Color = Get-OleColor 216 228 188
@@ -6399,10 +6417,10 @@ $dashboard.Range("E8:H8").Borders.Weight = 2
 $dashboard.Range("E8:H8").Borders.Color = Get-OleColor 166 166 166
 
 $sheetRollups = @(
-    @{ Name = "Plates & Sheets Nesting"; RowFml = "=COUNTA('Plates & Sheets (PL-SHT-BPL)'!`$C`$2:`$C`$$lastPlRow)"; QtyFml = "=SUM('Plates & Sheets (PL-SHT-BPL)'!`$E`$2:`$E`$$lastPlRow)"; WtFml = "=SUM('Plates & Sheets (PL-SHT-BPL)'!`$K`$2:`$K`$$lastPlRow)" },
-    @{ Name = "Structural Profiles"; RowFml = "=COUNTA('Profiles (W-HSS-L)'!`$C`$2:`$C`$$lastPrRow)"; QtyFml = "=SUM('Profiles (W-HSS-L)'!`$D`$2:`$D`$$lastPrRow)"; WtFml = "=SUM('Profiles (W-HSS-L)'!`$J`$2:`$J`$$lastPrRow)" },
-    @{ Name = "Hardware & Fasteners"; RowFml = "=COUNTA('Hardware & Fasteners'!`$B`$2:`$B`$$lastHwRow)"; QtyFml = "=SUM('Hardware & Fasteners'!`$F`$2:`$F`$$lastHwRow)"; WtFml = "=SUM('Hardware & Fasteners'!`$J`$2:`$J`$$lastHwRow)" },
-    @{ Name = "Labor & Operations"; RowFml = "=COUNTA('Labor & Weld Operations'!`$C`$2:`$C`$$lastLbRow)"; QtyFml = "=SUM('Labor & Weld Operations'!`$E`$2:`$E`$$lastLbRow)"; WtFml = 'NA' }
+    @{ Name = "Plates & Sheets Nesting"; RowFml = "=COUNTA('Plates & Sheets (PL-SHT-BPL)'!`$C`$2:`$C`$$lastPlRow)"; QtyFml = "=SUM('Plates & Sheets (PL-SHT-BPL)'!`$E`$2:`$E`$$lastPlRow)" },
+    @{ Name = "Structural Profiles"; RowFml = "=COUNTA('Profiles (W-HSS-L)'!`$C`$2:`$C`$$lastPrRow)"; QtyFml = "=SUM('Profiles (W-HSS-L)'!`$D`$2:`$D`$$lastPrRow)" },
+    @{ Name = "Hardware & Fasteners"; RowFml = "=COUNTA('Hardware & Fasteners'!`$B`$2:`$B`$$lastHwRow)"; QtyFml = "=SUM('Hardware & Fasteners'!`$F`$2:`$F`$$lastHwRow)" },
+    @{ Name = "Labor & Operations"; RowFml = "=COUNTA('Labor & Weld Operations'!`$C`$2:`$C`$$lastLbRow)"; QtyFml = "=SUM('Labor & Weld Operations'!`$E`$2:`$E`$$lastLbRow)" }
 )
 
 $srRow = 9
@@ -6410,12 +6428,8 @@ foreach ($sr in $sheetRollups) {
     $dashboard.Cells.Item($srRow, 5) = $sr.Name
     $dashboard.Cells.Item($srRow, 6).Formula = $sr.RowFml
     $dashboard.Cells.Item($srRow, 7).Formula = $sr.QtyFml
-    if ($sr.WtFml -eq 'NA') {
-        $dashboard.Cells.Item($srRow, 8) = "-"
-    } else {
-        $dashboard.Cells.Item($srRow, 8).Formula = $sr.WtFml
-        $dashboard.Cells.Item($srRow, 8).NumberFormat = "#,##0.00"
-    }
+    $dashboard.Cells.Item($srRow, 8).Formula = "=IFERROR(G$srRow/F$srRow,0)"
+    $dashboard.Cells.Item($srRow, 8).NumberFormat = "#,##0.0"
     $dashboard.Cells.Item($srRow, 6).NumberFormat = "#,##0"
     $dashboard.Cells.Item($srRow, 7).NumberFormat = "#,##0"
     $dashboard.Range("E$srRow:H$srRow").Borders.LineStyle = 1
@@ -6429,12 +6443,12 @@ foreach ($sr in $sheetRollups) {
 $dashboard.Cells.Item($srRow, 5) = "TOTAL AUDITED SUM"
 $dashboard.Cells.Item($srRow, 6).Formula = "=SUM(F9:F12)"
 $dashboard.Cells.Item($srRow, 7).Formula = "=SUM(G9:G11)"
-$dashboard.Cells.Item($srRow, 8).Formula = "=SUM(H9:H11)"
+$dashboard.Cells.Item($srRow, 8).Formula = "=IFERROR(G$srRow/SUM(F9:F11),0)"
 $dashboard.Range("E$srRow:H$srRow").Font.Bold = $true
 $dashboard.Range("E$srRow:H$srRow").Interior.Color = Get-OleColor 235 241 222
 $dashboard.Cells.Item($srRow, 6).NumberFormat = "#,##0"
 $dashboard.Cells.Item($srRow, 7).NumberFormat = "#,##0"
-$dashboard.Cells.Item($srRow, 8).NumberFormat = "#,##0.00"
+$dashboard.Cells.Item($srRow, 8).NumberFormat = "#,##0.0"
 $dashboard.Range("E$srRow:H$srRow").Borders.LineStyle = 1
 $dashboard.Range("E$srRow:H$srRow").Borders.Weight = 2
 $dashboard.Range("E$srRow:H$srRow").Borders.Color = Get-OleColor 166 166 166
@@ -6444,7 +6458,7 @@ $auditRow = $srRow + 1
 $dashboard.Cells.Item($auditRow, 5) = "Variance vs Master BOM"
 $dashboard.Cells.Item($auditRow, 6) = "-"
 $dashboard.Cells.Item($auditRow, 7).Formula = "=G$srRow-B10"
-$dashboard.Cells.Item($auditRow, 8).Formula = "=H$srRow-B11"
+$dashboard.Cells.Item($auditRow, 8) = "-"
 $dashboard.Range("E$auditRow:H$auditRow").Font.Italic = $true
 $dashboard.Cells.Item($auditRow, 7).NumberFormat = "#,##0"
 $dashboard.Cells.Item($auditRow, 8).NumberFormat = "#,##0.00"
@@ -6456,7 +6470,7 @@ $dashboard.Range("E$auditRow:H$auditRow").Borders.Color = Get-OleColor 220 225 2
 # SECTION 3: MATERIAL CATEGORY TAKEOFF & SHARES (Cols E-H, Rows 16-24)
 # =========================================================================
 $dashboard.Range("E16:H16").Merge()
-$dashboard.Cells.Item(16, 5) = "MATERIAL CATEGORY TAKEOFF & WEIGHT SHARES"
+$dashboard.Cells.Item(16, 5) = "MATERIAL CATEGORY TAKEOFF & SHARES"
 $dashboard.Range("E16:H16").Font.Bold = $true
 $dashboard.Range("E16:H16").Font.Size = 10
 $dashboard.Range("E16:H16").Font.Color = Get-OleColor 255 255 255
@@ -6466,7 +6480,7 @@ $dashboard.Range("E16:H16").HorizontalAlignment = -4108
 $dashboard.Cells.Item(17, 5) = "Category"
 $dashboard.Cells.Item(17, 6) = "Line Items"
 $dashboard.Cells.Item(17, 7) = "Piece Qty"
-$dashboard.Cells.Item(17, 8) = "Total Wt (lbs)"
+$dashboard.Cells.Item(17, 8) = "Assemblies"
 $dashboard.Range("E17:H17").Font.Bold = $true
 $dashboard.Range("E17:H17").Font.Size = 9
 $dashboard.Range("E17:H17").Interior.Color = Get-OleColor 216 228 188
@@ -6480,10 +6494,10 @@ foreach ($cName in $catList) {
     $dashboard.Cells.Item($cRow, 5) = $cName
     $dashboard.Cells.Item($cRow, 6).Formula = "=COUNTIF('Master BOM'!`$G`$2:`$G`$$lastMbRow, E$cRow)"
     $dashboard.Cells.Item($cRow, 7).Formula = "=SUMIF('Master BOM'!`$G`$2:`$G`$$lastMbRow, E$cRow, 'Master BOM'!`$F`$2:`$F`$$lastMbRow)"
-    $dashboard.Cells.Item($cRow, 8).Formula = "=SUMIF('Master BOM'!`$G`$2:`$G`$$lastMbRow, E$cRow, 'Master BOM'!`$N`$2:`$N`$$lastMbRow)"
+    $dashboard.Cells.Item($cRow, 8).Formula2 = "=IFERROR(ROWS(UNIQUE(FILTER('Master BOM'!`$B`$2:`$B`$$lastMbRow,'Master BOM'!`$G`$2:`$G`$$lastMbRow=E$cRow))),0)"
     $dashboard.Cells.Item($cRow, 6).NumberFormat = "#,##0"
     $dashboard.Cells.Item($cRow, 7).NumberFormat = "#,##0"
-    $dashboard.Cells.Item($cRow, 8).NumberFormat = "#,##0.00"
+    $dashboard.Cells.Item($cRow, 8).NumberFormat = "#,##0"
     $dashboard.Range("E$cRow:H$cRow").Borders.LineStyle = 1
     $dashboard.Range("E$cRow:H$cRow").Borders.Weight = 2
     $dashboard.Range("E$cRow:H$cRow").Borders.Color = Get-OleColor 220 225 230
@@ -6495,23 +6509,22 @@ foreach ($cName in $catList) {
 $dashboard.Cells.Item($cRow, 5) = "TOTAL MATERIAL"
 $dashboard.Cells.Item($cRow, 6).Formula = "=SUM(F18:F20)"
 $dashboard.Cells.Item($cRow, 7).Formula = "=SUM(G18:G20)"
-$dashboard.Cells.Item($cRow, 8).Formula = "=SUM(H18:H20)"
+$dashboard.Cells.Item($cRow, 8) = "-"
 $dashboard.Range("E$cRow:H$cRow").Font.Bold = $true
 $dashboard.Range("E$cRow:H$cRow").Interior.Color = Get-OleColor 235 241 222
 $dashboard.Cells.Item($cRow, 6).NumberFormat = "#,##0"
 $dashboard.Cells.Item($cRow, 7).NumberFormat = "#,##0"
-$dashboard.Cells.Item($cRow, 8).NumberFormat = "#,##0.00"
+$dashboard.Cells.Item($cRow, 8).NumberFormat = "#,##0"
 $dashboard.Range("E$cRow:H$cRow").Borders.LineStyle = 1
 $dashboard.Range("E$cRow:H$cRow").Borders.Weight = 2
 $dashboard.Range("E$cRow:H$cRow").Borders.Color = Get-OleColor 166 166 166
 
 # Category Share Rows (Weight % and Pcs %)
 $cShareRow = $cRow + 1
-$dashboard.Cells.Item($cShareRow, 5) = "Weight Distribution %"
+$dashboard.Cells.Item($cShareRow, 5) = "Line Item Distribution %"
 $dashboard.Cells.Item($cShareRow, 6) = "-"
 $dashboard.Cells.Item($cShareRow, 7) = "-"
-$dashboard.Cells.Item($cShareRow, 8).Formula = "=IF(B11>0, H$cRow/B11, 0)"
-$dashboard.Cells.Item($cShareRow, 8).NumberFormat = "0.0%"
+$dashboard.Cells.Item($cShareRow, 8) = "-"
 $dashboard.Range("E$cShareRow:H$cShareRow").Font.Italic = $true
 $dashboard.Range("E$cShareRow:H$cShareRow").Borders.LineStyle = 1
 $dashboard.Range("E$cShareRow:H$cShareRow").Borders.Weight = 2
@@ -6542,7 +6555,7 @@ $dashboard.Range("J7:M7").HorizontalAlignment = -4108
 $dashboard.Cells.Item(8, 10) = "TL #"
 $dashboard.Cells.Item(8, 11) = "Line Items"
 $dashboard.Cells.Item(8, 12) = "Total Qty"
-$dashboard.Cells.Item(8, 13) = "Total Wt (lbs)"
+$dashboard.Cells.Item(8, 13) = "Total Assm Wt (lbs)"
 $dashboard.Range("J8:M8").Font.Bold = $true
 $dashboard.Range("J8:M8").Font.Size = 9
 $dashboard.Range("J8:M8").Interior.Color = Get-OleColor 216 228 188
@@ -6556,7 +6569,7 @@ foreach ($tlVal in $displayTLs) {
     $dashboard.Cells.Item($tlIdx, 10) = $tlVal
     $dashboard.Cells.Item($tlIdx, 11).Formula = "=COUNTIF('Master BOM'!`$A`$2:`$A`$$lastMbRow, J$tlIdx)"
     $dashboard.Cells.Item($tlIdx, 12).Formula = "=SUMIF('Master BOM'!`$A`$2:`$A`$$lastMbRow, J$tlIdx, 'Master BOM'!`$F`$2:`$F`$$lastMbRow)"
-    $dashboard.Cells.Item($tlIdx, 13).Formula = "=SUMIF('Master BOM'!`$A`$2:`$A`$$lastMbRow, J$tlIdx, 'Master BOM'!`$N`$2:`$N`$$lastMbRow)"
+    $dashboard.Cells.Item($tlIdx, 13).Formula = (Get-AsmWtSumFormula "($mbTL=J$tlIdx)*" $mbTL $mbAsm $mbAsmTot $mbPieceTot)
     $dashboard.Cells.Item($tlIdx, 11).NumberFormat = "#,##0"
     $dashboard.Cells.Item($tlIdx, 12).NumberFormat = "#,##0"
     $dashboard.Cells.Item($tlIdx, 13).NumberFormat = "#,##0.00"
@@ -6595,7 +6608,7 @@ $dashboard.Range("O7:R7").HorizontalAlignment = -4108
 $dashboard.Cells.Item(8, 15) = "KSS File Name"
 $dashboard.Cells.Item(8, 16) = "Line Items"
 $dashboard.Cells.Item(8, 17) = "Total Qty"
-$dashboard.Cells.Item(8, 18) = "Total Wt (lbs)"
+$dashboard.Cells.Item(8, 18) = "Assemblies"
 $dashboard.Range("O8:R8").Font.Bold = $true
 $dashboard.Range("O8:R8").Font.Size = 9
 $dashboard.Range("O8:R8").Interior.Color = Get-OleColor 216 228 188
@@ -6610,7 +6623,7 @@ foreach ($sf in $srcFiles) {
     $dashboard.Cells.Item($sfIdx, 15) = $sf
     $dashboard.Cells.Item($sfIdx, 16).Formula = "=COUNTIF('Master BOM'!`$P`$2:`$P`$$lastMbRow, O$sfIdx)"
     $dashboard.Cells.Item($sfIdx, 17).Formula = "=SUMIF('Master BOM'!`$P`$2:`$P`$$lastMbRow, O$sfIdx, 'Master BOM'!`$F`$2:`$F`$$lastMbRow)"
-    $dashboard.Cells.Item($sfIdx, 18).Formula = "=SUMIF('Master BOM'!`$P`$2:`$P`$$lastMbRow, O$sfIdx, 'Master BOM'!`$N`$2:`$N`$$lastMbRow)"
+    $dashboard.Cells.Item($sfIdx, 18).Formula2 = "=IFERROR(ROWS(UNIQUE(FILTER('Master BOM'!`$B`$2:`$B`$$lastMbRow,'Master BOM'!`$P`$2:`$P`$$lastMbRow=O$sfIdx))),0)"
     $dashboard.Cells.Item($sfIdx, 16).NumberFormat = "#,##0"
     $dashboard.Cells.Item($sfIdx, 17).NumberFormat = "#,##0"
     $dashboard.Cells.Item($sfIdx, 18).NumberFormat = "#,##0.00"
@@ -6625,7 +6638,7 @@ foreach ($sf in $srcFiles) {
 $dashboard.Cells.Item($sfIdx, 15) = "TOTAL KSS SOURCES"
 $dashboard.Cells.Item($sfIdx, 16).Formula = "=SUM(P9:P$($sfIdx - 1))"
 $dashboard.Cells.Item($sfIdx, 17).Formula = "=SUM(Q9:Q$($sfIdx - 1))"
-$dashboard.Cells.Item($sfIdx, 18).Formula = "=SUM(R9:R$($sfIdx - 1))"
+$dashboard.Cells.Item($sfIdx, 18).Formula = "=B13"
 $dashboard.Range("O$sfIdx:R$sfIdx").Font.Bold = $true
 $dashboard.Range("O$sfIdx:R$sfIdx").Interior.Color = Get-OleColor 235 241 222
 $dashboard.Cells.Item($sfIdx, 16).NumberFormat = "#,##0"
@@ -6649,7 +6662,7 @@ $dashboard.Range("T7:W7").HorizontalAlignment = -4108
 $dashboard.Cells.Item(8, 20) = "Grade"
 $dashboard.Cells.Item(8, 21) = "Line Items"
 $dashboard.Cells.Item(8, 22) = "Piece Qty"
-$dashboard.Cells.Item(8, 23) = "Total Wt (lbs)"
+$dashboard.Cells.Item(8, 23) = "Assemblies"
 $dashboard.Range("T8:W8").Font.Bold = $true
 $dashboard.Range("T8:W8").Font.Size = 9
 $dashboard.Range("T8:W8").Interior.Color = Get-OleColor 216 228 188
@@ -6664,7 +6677,7 @@ foreach ($gr in $topGrades) {
     $dashboard.Cells.Item($grIdx, 20) = $gr
     $dashboard.Cells.Item($grIdx, 21).Formula = "=COUNTIF('Master BOM'!`$K`$2:`$K`$$lastMbRow, T$grIdx)"
     $dashboard.Cells.Item($grIdx, 22).Formula = "=SUMIF('Master BOM'!`$K`$2:`$K`$$lastMbRow, T$grIdx, 'Master BOM'!`$F`$2:`$F`$$lastMbRow)"
-    $dashboard.Cells.Item($grIdx, 23).Formula = "=SUMIF('Master BOM'!`$K`$2:`$K`$$lastMbRow, T$grIdx, 'Master BOM'!`$N`$2:`$N`$$lastMbRow)"
+    $dashboard.Cells.Item($grIdx, 23).Formula2 = "=IFERROR(ROWS(UNIQUE(FILTER('Master BOM'!`$B`$2:`$B`$$lastMbRow,'Master BOM'!`$K`$2:`$K`$$lastMbRow=T$grIdx))),0)"
     $dashboard.Cells.Item($grIdx, 21).NumberFormat = "#,##0"
     $dashboard.Cells.Item($grIdx, 22).NumberFormat = "#,##0"
     $dashboard.Cells.Item($grIdx, 23).NumberFormat = "#,##0.00"
@@ -6679,7 +6692,7 @@ foreach ($gr in $topGrades) {
 $dashboard.Cells.Item($grIdx, 20) = "TOTAL (Top Grades)"
 $dashboard.Cells.Item($grIdx, 21).Formula = "=SUM(U9:U$($grIdx - 1))"
 $dashboard.Cells.Item($grIdx, 22).Formula = "=SUM(V9:V$($grIdx - 1))"
-$dashboard.Cells.Item($grIdx, 23).Formula = "=SUM(W9:W$($grIdx - 1))"
+$dashboard.Cells.Item($grIdx, 23) = "-"
 $dashboard.Range("T$grIdx:W$grIdx").Font.Bold = $true
 $dashboard.Range("T$grIdx:W$grIdx").Interior.Color = Get-OleColor 235 241 222
 $dashboard.Cells.Item($grIdx, 21).NumberFormat = "#,##0"
@@ -6703,7 +6716,7 @@ $dashboard.Range("E28:H28").HorizontalAlignment = -4108
 $dashboard.Cells.Item(29, 5) = "Fastener Type"
 $dashboard.Cells.Item(29, 6) = "Line Items"
 $dashboard.Cells.Item(29, 7) = "Piece Quantity"
-$dashboard.Cells.Item(29, 8) = "Total Wt (lbs)"
+$dashboard.Cells.Item(29, 8) = "Avg Qty / Line"
 $dashboard.Range("E29:H29").Font.Bold = $true
 $dashboard.Range("E29:H29").Font.Size = 9
 $dashboard.Range("E29:H29").Interior.Color = Get-OleColor 216 228 188
@@ -6717,7 +6730,7 @@ foreach ($fShape in $fastenerShapes) {
     $dashboard.Cells.Item($fsRow, 5) = $fShape
     $dashboard.Cells.Item($fsRow, 6).Formula = "=COUNTIF('Hardware & Fasteners'!`$C`$2:`$C`$$lastHwRow, E$fsRow)"
     $dashboard.Cells.Item($fsRow, 7).Formula = "=SUMIF('Hardware & Fasteners'!`$C`$2:`$C`$$lastHwRow, E$fsRow, 'Hardware & Fasteners'!`$F`$2:`$F`$$lastHwRow)"
-    $dashboard.Cells.Item($fsRow, 8).Formula = "=SUMIF('Hardware & Fasteners'!`$C`$2:`$C`$$lastHwRow, E$fsRow, 'Hardware & Fasteners'!`$J`$2:`$J`$$lastHwRow)"
+    $dashboard.Cells.Item($fsRow, 8).Formula = "=IFERROR(G$fsRow/F$fsRow,0)"
     $dashboard.Cells.Item($fsRow, 6).NumberFormat = "#,##0"
     $dashboard.Cells.Item($fsRow, 7).NumberFormat = "#,##0"
     $dashboard.Cells.Item($fsRow, 8).NumberFormat = "#,##0.00"
@@ -6809,7 +6822,7 @@ $dashboard.Range("O28:R28").HorizontalAlignment = -4108
 $dashboard.Cells.Item(29, 15) = "Assembly Sample"
 $dashboard.Cells.Item(29, 16) = "Line Items"
 $dashboard.Cells.Item(29, 17) = "Total Qty"
-$dashboard.Cells.Item(29, 18) = "Total Wt (lbs)"
+$dashboard.Cells.Item(29, 18) = "Total Assm Wt (lbs)"
 $dashboard.Range("O29:R29").Font.Bold = $true
 $dashboard.Range("O29:R29").Font.Size = 9
 $dashboard.Range("O29:R29").Interior.Color = Get-OleColor 216 228 188
@@ -6824,7 +6837,7 @@ foreach ($asm in $sampleAssms) {
     $dashboard.Cells.Item($asRow, 15) = $asm
     $dashboard.Cells.Item($asRow, 16).Formula = "=COUNTIF('Master BOM'!`$B`$2:`$B`$$lastMbRow, O$asRow)"
     $dashboard.Cells.Item($asRow, 17).Formula = "=SUMIF('Master BOM'!`$B`$2:`$B`$$lastMbRow, O$asRow, 'Master BOM'!`$F`$2:`$F`$$lastMbRow)"
-    $dashboard.Cells.Item($asRow, 18).Formula = "=SUMIF('Master BOM'!`$B`$2:`$B`$$lastMbRow, O$asRow, 'Master BOM'!`$N`$2:`$N`$$lastMbRow)"
+    $dashboard.Cells.Item($asRow, 18).Formula = (Get-AsmWtSumFormula "($mbAsm=O$asRow)*" $mbTL $mbAsm $mbAsmTot $mbPieceTot)
     $dashboard.Cells.Item($asRow, 16).NumberFormat = "#,##0"
     $dashboard.Cells.Item($asRow, 17).NumberFormat = "#,##0"
     $dashboard.Cells.Item($asRow, 18).NumberFormat = "#,##0.00"
@@ -6872,10 +6885,10 @@ $dashboard.Range("T29:W29").Borders.Weight = 2
 $dashboard.Range("T29:W29").Borders.Color = Get-OleColor 166 166 166
 
 $ratios = @(
-    @{ Name = "Overall Avg Wt per Piece"; Fml = "=IF(B10>0, B11/B10, 0)"; Unit = "lbs / pc"; Fmt = "#,##0.00" },
-    @{ Name = "Plate Weight Percentage"; Fml = "=IF(B11>0, H18/B11, 0)"; Unit = "% of total"; Fmt = "0.0%" },
-    @{ Name = "Profile Weight Percentage"; Fml = "=IF(B11>0, H19/B11, 0)"; Unit = "% of total"; Fmt = "0.0%" },
-    @{ Name = "Hardware Weight Percentage"; Fml = "=IF(B11>0, H20/B11, 0)"; Unit = "% of total"; Fmt = "0.0%" },
+    @{ Name = "Avg Assm Wt per Part Piece"; Fml = "=IF(B10>0, B11/B10, 0)"; Unit = "lbs / pc"; Fmt = "#,##0.00" },
+    @{ Name = "Plate Piece Percentage"; Fml = "=IF(B10>0, G18/B10, 0)"; Unit = "% of pieces"; Fmt = "0.0%" },
+    @{ Name = "Profile Piece Percentage"; Fml = "=IF(B10>0, G19/B10, 0)"; Unit = "% of pieces"; Fmt = "0.0%" },
+    @{ Name = "Hardware Piece Percentage"; Fml = "=IF(B10>0, G20/B10, 0)"; Unit = "% of pieces"; Fmt = "0.0%" },
     @{ Name = "Shop Operations per Assembly"; Fml = "=IF(B13>0, L35/B13, 0)"; Unit = "ops / assm"; Fmt = "#,##0.0" },
     @{ Name = "Shop Operations per Ton"; Fml = "=IF(B12>0, L35/B12, 0)"; Unit = "ops / ton"; Fmt = "#,##0.0" }
 )

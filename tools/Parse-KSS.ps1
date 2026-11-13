@@ -5355,6 +5355,27 @@ if ($workbookTLs.Count -gt 0 -and $modeChoice -ne "2") {
                     Write-Log "$($x.TL): NO .kss DATA for $($xMissing.Count) assembly(ies), so they are NOT in the output: $(($xMissing | Select-Object -First 15) -join ', ')$(if ($xMissing.Count -gt 15) { ' ...' }). Select the .kss that holds them." "Red"
                 }
             }
+
+            # Where every transmittal's assemblies ended up: the cost code (TL) written to the filtered .kss is the LAST transmittal that lists the assembly,
+            # so a TL whose assemblies are all listed again by a later TL / REV disappears from the file. Say so per transmittal.
+            Write-Host ""
+            Write-Host "  Transmittals in the filtered KISS file (cost code):" -ForegroundColor Yellow
+            $finalTl = @{}
+            foreach ($mi in $masterData) { $finalTl["$($mi.Assembly)".Trim()] = "$($mi.TL)" }
+            foreach ($wt in @($workbookTLs | Where-Object { $n = [int]$_.Number; @($allTLs | Where-Object { [int]($_ -replace '\D', '0') -eq $n }).Count -gt 0 } | Sort-Object Number)) {
+                $listed = @($wt.SeqAssemblies.Values | ForEach-Object { $_ } | Sort-Object -Unique)
+                $mine = "TL$($wt.Number)"
+                $inFile = @($listed | Where-Object { $finalTl.ContainsKey($_) -and $finalTl[$_] -eq $mine })
+                $noData = @($listed | Where-Object { -not $finalTl.ContainsKey($_) })
+                $moved = @($listed | Where-Object { $finalTl.ContainsKey($_) -and $finalTl[$_] -ne $mine })
+                $movedTo = @($moved | ForEach-Object { $finalTl[$_] } | Select-Object -Unique) -join ', '
+                $line = "    {0,-9} listed {1,4}   in the file {2,4}" -f $wt.TL, $listed.Count, $inFile.Count
+                if ($moved.Count -gt 0) { $line += "   listed again by $movedTo (shown there): $($moved.Count)" }
+                if ($noData.Count -gt 0) { $line += "   NO .kss DATA: $($noData.Count)" }
+                $color = if ($noData.Count -gt 0 -or $inFile.Count -eq 0) { 'Red' } else { 'Gray' }
+                Write-Host $line -ForegroundColor $color
+            }
+            Write-Host ""
         }
     }
 }

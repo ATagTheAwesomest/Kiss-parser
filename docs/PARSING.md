@@ -85,6 +85,7 @@ A `D` line must have at least 10 comma-separated fields to be accepted. Fields a
 - **Weight:** see gotcha 1.
 - **Merge rules:** the Plates, Profiles and Hardware tabs group rows by part mark (or by source file and part mark in Separate mode), sum the quantities, and take the first row's size, grade, length and weight.
 - **Master BOM extended weight** is a live Excel formula (`Qty x Unit Wt`). The `Status` column is filled with `PENDING`.
+- **Statistics weight** uses the assembly weight only (`Asm Wt Ea` / `Asm Wt Total` columns), never the piece weight. Because those columns repeat on every part row of an assembly, the Statistics formulas split each row's assembly weight across the rows of its TL + assembly so every assembly is counted once. The CSV mode has no assembly weights and still falls back to the piece weight.
 
 ## 5. Assembly whitelist and REV logic
 

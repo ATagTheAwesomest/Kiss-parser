@@ -76,6 +76,8 @@ There is one set of these two scripts for the whole run, however many TLs you pa
 
 ## 5a. Using the shop scripts: pick what you are nesting
 
+The whole list is shown, a page at a time (Enter = next page). Type `G` to switch the list between *by sequence + TL* and *by TL*. You can type numbers, TL names, sequences, comma lists and ranges such as `23-40` (list numbers) or `TL12-TL44` (transmittal numbers), mixed together.
+
 Parse every TL at once, then tell the script which ones are being nested today. Start either `.bat` file and you see a list like:
 
 ```
